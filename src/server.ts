@@ -14,6 +14,7 @@ import {
 } from "./transactions-transfer-history";
 import prisma from "./prisma";
 import { tokens } from "./constants/tokens";
+import axios from "axios";
 
 dotenv.config();
 
@@ -274,6 +275,30 @@ app.get(
     }
   }
 );
+
+app.get("/api/ft-token-price", async (req: Request, res: Response) => {
+  try {
+    const { account_id } = req.query;
+    if (!account_id) {
+      return res.status(400).send({ error: "account_id is required" });
+    }
+
+    const contract = account_id === "near" ? "wrap.near" : account_id;
+    const { data } = await axios.get(
+      `https://api.nearblocks.io/v1/fts/${contract}`,
+      {
+        headers: {
+          Authorization: `Bearer ${process.env.NEARBLOCKS_API_KEY}`,
+        },
+      }
+    );
+    const contractData = data?.contracts?.[0];
+    return res.send({ price: parseFloat(contractData.price) || 0 });
+  } catch (error) {
+    console.error("Error fetching data:", error);
+    return res.status(500).send({ error: "An error occurred" });
+  }
+});
 
 // Start the server
 if (process.env.NODE_ENV !== "test") {
