@@ -8,6 +8,10 @@ import * as ftTokens from "../src/ft-tokens";
 import * as allTokenBalanceHistory from "../src/all-token-balance-history";
 import * as transactionsTransferHistory from "../src/transactions-transfer-history";
 import { tokens } from "../src/constants/tokens";
+import axios from "axios";
+
+jest.mock("axios");
+const mockedAxios = axios as jest.Mocked<typeof axios>;
 
 // Mock all external dependencies
 jest.mock("../src/prisma", () => ({
@@ -229,6 +233,53 @@ describe("API Endpoints", () => {
       );
 
       expect(response.status).toBe(400);
+    });
+  });
+
+  describe("GET /api/ft-token-price", () => {
+    it("should return token price of near", async () => {
+      const mockPrice = 2;
+      const mockResponse = {
+        data: {
+          contracts: [{ price: mockPrice.toString() }],
+        },
+      };
+
+      mockedAxios.get.mockResolvedValue(mockResponse);
+
+      const response = await request(app)
+        .get("/api/ft-token-price")
+        .query({ account_id: "near" });
+
+      expect(response.status).toBe(200);
+      expect(response.body).toEqual({ price: mockPrice });
+
+      expect(axios.get).toHaveBeenCalledWith(
+        "https://api.nearblocks.io/v1/fts/wrap.near",
+        expect.objectContaining({
+          headers: expect.objectContaining({
+            Authorization: expect.stringContaining("Bearer"),
+          }),
+        })
+      );
+    });
+
+    it("should return 400 if account_id is missing", async () => {
+      const response = await request(app).get("/api/ft-token-price");
+
+      expect(response.status).toBe(400);
+      expect(response.body).toEqual({ error: "account_id is required" });
+    });
+
+    it("should return 500 if axios request fails", async () => {
+      mockedAxios.get.mockRejectedValue(new Error("API error"));
+
+      const response = await request(app)
+        .get("/api/ft-token-price")
+        .query({ account_id: "near" });
+
+      expect(response.status).toBe(500);
+      expect(response.body).toEqual({ error: "An error occurred" });
     });
   });
 });
