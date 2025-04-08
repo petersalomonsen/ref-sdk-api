@@ -1,6 +1,7 @@
 import axios from "axios";
 import Big from "big.js";
 import prisma from "./prisma";
+import { tokens } from "./constants/tokens";
 
 type FTCache = {
   get: (key: string) => any;
@@ -127,7 +128,7 @@ export async function getFTTokens(account_id: string, cache: FTCache) {
   }
 
   // Sort tokens by value (amount * price) in descending order
-  const sortedFts = updatedFts.sort(
+  let sortedFts = updatedFts.sort(
     (a: any, b: any) =>
       parseFloat(a.amount) * (a.ft_meta?.price || 0) -
       parseFloat(b.amount) * (b.ft_meta?.price || 0)
@@ -149,6 +150,23 @@ export async function getFTTokens(account_id: string, cache: FTCache) {
     (acc, value) => acc + parseFloat(value),
     0
   );
+
+  // wrap.near ft_metadata doesn't have an image
+  sortedFts = sortedFts.map((ft) => {
+    const isWrapped = ft.contract === "wrap.near";
+    const icon = isWrapped 
+      ? tokens?.[ft.contract]?.icon 
+      : ft.ft_meta?.icon ?? tokens?.[ft.contract]?.icon;
+  
+    return {
+      ...ft,
+      ft_meta: {
+        ...ft.ft_meta,
+        icon,
+      },
+    };
+  });
+  
 
   await prisma.fTToken.create({
     data: {
