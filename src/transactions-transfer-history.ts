@@ -4,12 +4,7 @@ import {
   fetchPikespeakEndpoint,
   sortByDate,
 } from "./utils/lib";
-
-type TransferHistoryCache = {
-  get: (key: string) => any;
-  set: (key: string, value: any, ttl: number) => void;
-  del: (key: string) => void;
-};
+import prisma from "./prisma";
 
 export type TransferHistoryParams = {
   page?: string;
@@ -17,37 +12,38 @@ export type TransferHistoryParams = {
   treasuryDaoID: string;
 };
 
-const totalTxnsPerPage = 20; // Return 20 items per page
+const totalTxnsPerPage = 20;
+const REFRESH_INTERVAL_MS = 10 * 60 * 1000;
 
 export async function getTransactionsTransferHistory(
-  params: TransferHistoryParams,
-  cache: TransferHistoryCache
+  params: TransferHistoryParams
 ) {
   const { page = "1", lockupContract, treasuryDaoID } = params;
-
-  if (!treasuryDaoID) {
-    throw new Error("treasuryDaoID is required");
-  }
-
   const requestedPage = parseInt(page, 10);
+  const now = Date.now();
+
+  if (!treasuryDaoID) throw new Error("treasuryDaoID is required");
+
   const cacheKey = `${treasuryDaoID}-${lockupContract || "no-lockup"}`;
 
-  // Retrieve cached raw data and timestamp (before sorting)
-  let cachedData = cache.get(cacheKey) || [];
-  let cachedTimestamp = cache.get(`${cacheKey}-timestamp`);
-
-  const currentTime = Date.now();
-
   try {
-    // If cache is empty or older than 10 minutes, fetch new data
-    if (!cachedData || !cachedTimestamp) {
-      const accounts: any[] = [treasuryDaoID];
-      if (lockupContract) {
-        accounts.push(lockupContract);
-      }
+    let cachedEntry = await prisma.transferHistory.findUnique({
+      where: { cacheKey },
+    });
 
-      // Fetch transfers for all accounts (treasuryDaoID + lockupContract if provided)
-      const latestPagePromises = accounts.flatMap((account) => [
+    let cachedData: any[] = (cachedEntry?.data as any[]) || [];
+    const isStale =
+      !cachedEntry ||
+      now - new Date(cachedEntry.timestamp).getTime() > REFRESH_INTERVAL_MS;
+
+    // Step 1: Refresh base data if stale
+    if (isStale) {
+      const accounts = [
+        treasuryDaoID,
+        ...(lockupContract ? [lockupContract] : []),
+      ];
+
+      const transferPromises = accounts.flatMap((account) => [
         fetchPikespeakEndpoint(
           `https://api.pikespeak.ai/account/near-transfer/${account}?limit=${totalTxnsPerPage}&offset=0`
         ),
@@ -55,61 +51,83 @@ export async function getTransactionsTransferHistory(
           `https://api.pikespeak.ai/account/ft-transfer/${account}?limit=${totalTxnsPerPage}&offset=0`
         ),
       ]);
-      const latestPageResults = await Promise.all(latestPagePromises);
 
-      if (latestPageResults.some((result: any) => !result.ok)) {
-        throw new Error("Failed to fetch the latest page");
-      }
+      const results = await Promise.all(transferPromises);
+      const allData = results.flatMap((res) => (res.ok ? res.body : []));
 
-      const latestPageData = latestPageResults.flatMap(
-        (result: any) => result.body
-      );
-
-      // Check for updates: Compare the raw API data (not sorted)
-      const latestPageDataLength = latestPageData.length;
-      const cachedSlice = cachedData.slice(0, latestPageDataLength); // Get the same length slice from the cached data
-
-      // Only update if the latest page data differs from the cached slice
-      if (
+      const cachedSlice = cachedData.slice(0, allData.length);
+      const isUpdated =
         cachedData.length === 0 ||
-        JSON.stringify(latestPageData) !== JSON.stringify(cachedSlice)
-      ) {
-        console.log("Updates detected, fetching new data...");
+        JSON.stringify(allData) !== JSON.stringify(cachedSlice);
 
-        const updatedData = [...latestPageData, ...cachedData];
-
-        // Deduplicate cached data based on timestamp
-        cachedData = deduplicateByTimestamp(updatedData);
-        cache.set(cacheKey, cachedData, 0);
-        cache.set(`${cacheKey}-timestamp`, currentTime, 120);
+      if (isUpdated) {
+        cachedData = deduplicateByTimestamp([...allData, ...cachedData]);
+        await prisma.transferHistory.upsert({
+          where: { cacheKey },
+          update: { data: cachedData, timestamp: new Date() },
+          create: { cacheKey, data: cachedData },
+        });
       }
     }
 
-    // Check if additional pages need to be fetched
-    const totalCachedPages = Math.ceil(
-      cachedData.length / (totalTxnsPerPage * 2)
-    );
+    // Step 2: Check if more pages are needed
+    const cachedItemCount = cachedData.length;
+    const requiredCount = requestedPage * totalTxnsPerPage;
 
-    if (requestedPage > totalCachedPages) {
-      const additionalData = await fetchAdditionalPage(
-        totalTxnsPerPage,
-        treasuryDaoID,
-        lockupContract,
-        totalCachedPages
-      );
+    if (cachedItemCount < requiredCount) {
+      const totalCachedPages = Math.floor(cachedItemCount / totalTxnsPerPage);
 
-      // Add the newly fetched data and deduplicate it
-      cachedData = [...cachedData, ...additionalData];
-      cachedData = deduplicateByTimestamp(cachedData);
+      // Fetch until we cover the requested page
+      for (
+        let pageNum = totalCachedPages + 1;
+        pageNum <= requestedPage;
+        pageNum++
+      ) {
+        const moreData = await fetchAdditionalPage(
+          totalTxnsPerPage,
+          treasuryDaoID,
+          lockupContract,
+          pageNum - 1 // offset starts from 0
+        );
 
-      // Save the updated data to the cache
-      cache.set(cacheKey, cachedData, 0);
-      cache.set(`${cacheKey}-timestamp`, currentTime, 120);
+        cachedData = deduplicateByTimestamp([...cachedData, ...moreData]);
+
+        await prisma.transferHistory.upsert({
+          where: { cacheKey },
+          update: { data: cachedData, timestamp: new Date() },
+          create: { cacheKey, data: cachedData },
+        });
+      }
     }
 
     const endIndex = requestedPage * totalTxnsPerPage;
     return sortByDate(cachedData.slice(0, endIndex));
-  } catch (error) {
-    throw error;
+  } catch (error: any) {
+    console.error("Error in getTransactionsTransferHistory:", error);
+
+    // Fallback: try returning whatever is cached in the DB
+    try {
+      const fallback = await prisma.transferHistory.findUnique({
+        where: {
+          cacheKey: `${params.treasuryDaoID}-${
+            params.lockupContract || "no-lockup"
+          }`,
+        },
+      });
+
+      if (fallback?.data) {
+        const requestedPage = parseInt(params.page || "1", 10);
+        const endIndex = requestedPage * totalTxnsPerPage;
+        const data = fallback.data as any[];
+        return sortByDate(data.slice(0, endIndex));
+      }
+    } catch (fallbackError) {
+      console.error(
+        "Failed to retrieve fallback cached data:",
+        fallbackError
+      );
+    }
+
+    throw new Error("Failed to retrieve transaction history.");
   }
 }

@@ -1,12 +1,58 @@
 import { fetchFromRPC } from "./utils/fetch-from-rpc";
-import { formatDate } from "./utils/format-date";
 import { convertFTBalance } from "./utils/convert-ft-balance";
 import prisma from "./prisma";
 import { tokens } from "./constants/tokens";
-import { interpolateTimestampsToTenMinutes } from "./utils/interpolate-values";
 import { periodMap } from "./constants/period-map";
 import { getUserStakeBalances } from "./utils/lib";
 
+const BLOCKS_PER_HOUR = 3200;
+
+function formatLabel(timestamp: number, period: string): string {
+  const date = new Date(timestamp);
+  switch (period) {
+    case "1Y":
+      return date.toLocaleDateString("en-US", {
+        month: "short",
+        year: "numeric",
+      });
+
+    case "1M":
+      return date.toLocaleDateString("en-US", {
+        month: "short",
+        day: "numeric",
+      });
+
+    case "1W":
+      return date.toLocaleDateString("en-US", {
+        weekday: "short",
+        month: "short",
+        day: "numeric",
+      });
+
+    case "1D":
+      return date.toLocaleString("en-US", {
+        month: "short",
+        day: "numeric",
+        hour: "numeric",
+        hour12: true,
+      });
+
+    case "1H":
+      return date.toLocaleTimeString("en-US", {
+        hour: "numeric",
+        minute: "2-digit",
+        hour12: true,
+      });
+
+    default:
+      return date.toLocaleDateString("en-US", {
+        month: "short",
+        year: "numeric",
+      });
+  }
+}
+
+type BalanceHistoryEntry = { timestamp: number; date: string; balance: string };
 type AllTokenBalanceHistoryCache = {
   get: (key: string) => any;
   set: (key: string, value: any, ttl?: number) => void;
@@ -18,23 +64,14 @@ export async function getAllTokenBalanceHistory(
   cacheKey: string,
   account_id: string,
   token_id: string
-): Promise<
-  Record<string, { timestamp: number; date: string; balance: string }[]>
-> {
+): Promise<Record<string, BalanceHistoryEntry[]>> {
   let rpcCallCount = 0;
-
-  const cachedData = cache.get(cacheKey);
-  if (cachedData) {
-    console.log(`Cached response for key: ${cacheKey}`);
-    return cachedData;
-  }
 
   const token = tokens[token_id as keyof typeof tokens];
   let decimals = token?.decimals || 24;
 
-  try {
-    if (!token?.decimals) {
-      console.log(`Fetching token details for ${token_id}`);
+  if (!token?.decimals) {
+    try {
       const tokenDetails = await fetchFromRPC(
         {
           jsonrpc: "2.0",
@@ -51,22 +88,18 @@ export async function getAllTokenBalanceHistory(
         false,
         false
       );
-
       const decodedResult = tokenDetails.result.result
         .map((c: number) => String.fromCharCode(c))
         .join("");
-
       const decodedResultObject = JSON.parse(decodedResult);
       decimals = parseInt(decodedResultObject.decimals, 10);
-
-      console.log(`Decimals: ${decimals}`);
+    } catch (err) {
+      console.error("Failed to fetch token metadata:", err);
     }
-  } catch (error) {
-    console.log(`Error fetching token details for ${token_id}: ${error}`);
   }
 
   try {
-    const blockData = await fetchFromRPC(
+    const currentBlockData = await fetchFromRPC(
       {
         jsonrpc: "2.0",
         id: 1,
@@ -77,213 +110,216 @@ export async function getAllTokenBalanceHistory(
       false
     );
     rpcCallCount++;
+    const currentBlock = currentBlockData.result.header.height;
 
-    if (!blockData.result) {
-      throw new Error("Failed to fetch latest block");
-    }
+    const existingHistories = await prisma.tokenBalanceHistory.findMany({
+      where: { account_id, token_id },
+    });
 
-    const endBlock = blockData.result.header.height;
-    const BLOCKS_IN_ONE_HOUR = 3200;
+    const existingMap = Object.fromEntries(
+      existingHistories
+        .filter((e: any) => Array.isArray(e.balance_history))
+        .map((e: any) => [e.period, e])
+    );
 
-    // Shuffle the periodMap but keep "1Y" at index 0
-    const shuffledPeriodMap = [
-      periodMap[0],
-      ...periodMap.slice(1).sort(() => Math.random() - 0.5),
-    ];
-
-    // Fetch balance history for each period
     const allPeriodHistories = await Promise.all(
-      shuffledPeriodMap.map(async (periodConfig) => {
-        const { period, value, interval } = periodConfig;
-        try {
-          const useArchival =
-            period === "1Y" ||
-            period === "1M" ||
-            period === "1W" ||
-            period === "All";
-          const BLOCKS_IN_PERIOD = Math.floor(BLOCKS_IN_ONE_HOUR * value);
+      periodMap.map(async ({ period, value, interval }) => {
+        const useArchival = ["1Y", "1M", "1W", "All"].includes(period);
+        const hoursPerStep = value / interval;
+        const blocksPerStep = Math.floor(BLOCKS_PER_HOUR * hoursPerStep);
 
-          const blockHeights = Array.from(
-            { length: interval },
-            (_, i) => endBlock - BLOCKS_IN_PERIOD * i
-          ).filter((block) => block > 1000000);
-          // below 1000000 it throws 422 error
+        const prev = existingMap[period];
+        const lastStoredBlock =
+          typeof prev?.toBlock === "number" ? prev.toBlock : 0;
 
-          const firstBlock = blockHeights[blockHeights.length - 1];
-          console.log(`Fetching first block: ${firstBlock}`);
-          const firstBlockDataForPeriod = await fetchFromRPC(
-            {
-              jsonrpc: "2.0",
-              id: firstBlock,
-              method: "block",
-              params: { block_id: firstBlock },
-            },
-            false,
-            useArchival
-          );
-          rpcCallCount++;
-          // We interpolate the timestamps into 10 minute buckets to not
-          // have to request the timestamp for each block from the RPC reducing
-          // the RPC call with: (the amount of blocks || intervals) - 1
-          const blockTimestamps = interpolateTimestampsToTenMinutes(
-            firstBlockDataForPeriod.result.header.timestamp / 1e6,
-            blockData.result.header.timestamp / 1e6,
-            blockHeights.length
-          ).reverse();
-
-          const balances = await Promise.all(
-            blockHeights.map(async (block_id) => {
-              rpcCallCount++; // Increment counter for each balance request
-              if (token_id === "near") {
-                console.log(
-                  `Viewing account for ${account_id} at block ${block_id} ${
-                    useArchival
-                      ? "using archival RPC"
-                      : "using non-archival RPC"
-                  }`
-                );
-                return fetchFromRPC(
-                  {
-                    jsonrpc: "2.0",
-                    id: 1,
-                    method: "query",
-                    params: {
-                      request_type: "view_account",
-                      block_id,
-                      account_id,
-                    },
-                  },
-                  false,
-                  useArchival
-                );
-              } else {
-                return fetchFromRPC(
-                  {
-                    jsonrpc: "2.0",
-                    id: "dontcare",
-                    method: "query",
-                    params: {
-                      request_type: "call_function",
-                      block_id,
-                      account_id: token_id,
-                      method_name: "ft_balance_of",
-                      args_base64: btoa(JSON.stringify({ account_id })),
-                    },
-                  },
-                  false,
-                  useArchival
-                );
-              }
-            })
-          );
-
-          let userStakeBalances: any[] = [];
-          if (token_id === "near") {
-            // fetch all pools where user has staked near and get the balance for each at each blockheights
-            userStakeBalances = await getUserStakeBalances(
-              account_id,
-              blockHeights,
-              rpcCallCount,
-              cache,
-              useArchival
-            );
-          }
-
-          const balanceHistory = blockTimestamps.map((timestamp, index) => {
-            const balanceData = balances[index];
-            const stakeBalance = userStakeBalances[index];
-            const balanceMinimum = token_id === "near" ? "6" : "0";
-            let balance = balanceMinimum;
-
-            if (token_id === "near") {
-              balance =
-                balanceData?.result?.amount?.toString() || balanceMinimum;
-              balance = (
-                BigInt(balance) + BigInt(stakeBalance || 0)
-              ).toString();
-            } else if (balanceData?.result?.result) {
-              balance = String.fromCharCode(...balanceData.result.result);
-              balance = balance ? balance.replace(/"/g, "") : balanceMinimum;
-            }
-
-            return {
-              timestamp,
-              date: formatDate(timestamp, value),
-              balance: balance
-                ? convertFTBalance(balance, decimals)
-                : balanceMinimum,
-            };
-          });
-
+        if (currentBlock <= lastStoredBlock) {
+          console.log(`[${period}] No new blocks since last stored. Skipping.`);
           return {
             period,
-            // Sort the balance history by timestamp in ascending order
-            data: balanceHistory.sort((a, b) => a.timestamp - b.timestamp),
-          };
-        } catch (error) {
-          console.error(`Error fetching data for period ${period}:`, error);
-          return {
-            period,
-            data: [], // Return empty data for this period instead of failing the entire request
+            data: Array.isArray(prev?.balance_history)
+              ? prev.balance_history
+              : [],
           };
         }
+
+        // Clamp the number of steps to the intended interval count
+        const totalSteps = Math.min(
+          interval,
+          Math.floor((currentBlock - lastStoredBlock) / blocksPerStep)
+        );
+
+        if (totalSteps <= 0) {
+          console.log(`[${period}] [${account_id}]  No new steps to fetch.`);
+          return {
+            period,
+            data: Array.isArray(prev?.balance_history)
+              ? prev.balance_history
+              : [],
+          };
+        }
+
+        const blockHeights = Array.from(
+          { length: totalSteps },
+          (_, i) => currentBlock - blocksPerStep * (totalSteps - 1 - i)
+        ).filter((block) => block > lastStoredBlock && block > 1_000_000);
+
+        if (blockHeights.length === 0) {
+          console.log(
+            `[${period}] Filtered block heights are empty. Skipping.`
+          );
+          return {
+            period,
+            data: Array.isArray(prev?.balance_history)
+              ? prev.balance_history
+              : [],
+          };
+        }
+
+        const timestamps = await Promise.all(
+          blockHeights.map(async (block_id) => {
+            const data = await fetchFromRPC(
+              {
+                jsonrpc: "2.0",
+                id: block_id,
+                method: "block",
+                params: { block_id },
+              },
+              false,
+              useArchival
+            );
+            rpcCallCount++;
+            return data.result.header.timestamp / 1e6;
+          })
+        );
+
+        const balances = await Promise.all(
+          blockHeights.map(async (block_id) => {
+            rpcCallCount++;
+            if (token_id === "near") {
+              return fetchFromRPC(
+                {
+                  jsonrpc: "2.0",
+                  id: 1,
+                  method: "query",
+                  params: {
+                    request_type: "view_account",
+                    block_id,
+                    account_id,
+                  },
+                },
+                false,
+                useArchival
+              );
+            } else {
+              return fetchFromRPC(
+                {
+                  jsonrpc: "2.0",
+                  id: "dontcare",
+                  method: "query",
+                  params: {
+                    request_type: "call_function",
+                    block_id,
+                    account_id: token_id,
+                    method_name: "ft_balance_of",
+                    args_base64: btoa(JSON.stringify({ account_id })),
+                  },
+                },
+                false,
+                useArchival
+              );
+            }
+          })
+        );
+
+        let stakeBalances: any[] = [];
+        if (token_id === "near") {
+          // fetch all pools where user has staked near and get the balance for each at each blockheights
+
+          stakeBalances = await getUserStakeBalances(
+            account_id,
+            blockHeights,
+            rpcCallCount,
+            cache,
+            useArchival
+          );
+        }
+
+        const newHistory = blockHeights.map((_, index) => {
+          let balance = "0";
+          if (token_id === "near") {
+            balance = balances[index]?.result?.amount?.toString() || "0";
+            balance = (
+              BigInt(balance) + BigInt(stakeBalances[index] || 0)
+            ).toString();
+          } else {
+            const raw = String.fromCharCode(
+              ...(balances[index]?.result?.result || [])
+            );
+            balance = raw ? raw.replace(/"/g, "") : "0";
+          }
+
+          return {
+            timestamp: timestamps[index],
+            date: formatLabel(timestamps[index], period),
+            balance: convertFTBalance(balance, decimals),
+          };
+        });
+
+        const fullHistory = [
+          ...((prev?.balance_history as BalanceHistoryEntry[]) || []),
+          ...newHistory,
+        ].slice(-interval);
+
+        if (prev) {
+          await prisma.tokenBalanceHistory.update({
+            where: {
+              account_id_token_id_period: {
+                account_id,
+                token_id,
+                period,
+              },
+            },
+            data: {
+              balance_history: fullHistory,
+              toBlock: currentBlock,
+            },
+          });
+        } else {
+          await prisma.tokenBalanceHistory.create({
+            data: {
+              account_id,
+              token_id,
+              period,
+              balance_history: fullHistory,
+              fromBlock: blockHeights[0],
+              toBlock: currentBlock,
+            },
+          });
+        }
+
+        return { period, data: fullHistory };
       })
     );
 
-    const respData = Object.fromEntries(
-      allPeriodHistories.map(({ period, data }) => [period, data])
-    );
+    const resp = allPeriodHistories.reduce((acc, { period, data }) => {
+      acc[period] = data as BalanceHistoryEntry[];
+      return acc;
+    }, {} as Record<string, BalanceHistoryEntry[]>);
 
-    // Store in database for every data value that is not empty
-    allPeriodHistories.forEach(async ({ period, data }) => {
-      if (data.length > 0) {
-        console.log(
-          `Saving to database for ${account_id} and ${token_id} and ${period}`
-        );
-        await prisma.tokenBalanceHistory.create({
-          data: { account_id, token_id, period, balance_history: data },
-        });
-      }
+    cache.set(cacheKey, resp, 60 * 5);
+    console.log(`Total RPC calls made: ${rpcCallCount}`);
+    return resp;
+  } catch (err) {
+    console.error("Fatal error in balance history. Using DB fallback:", err);
+    const fallback = await prisma.tokenBalanceHistory.findMany({
+      where: { account_id, token_id },
     });
 
-    // Only save to cache if we have all data
-    if (Object.values(respData).every((data) => data.length > 0)) {
-      console.log(`Saving to cache for key: ${cacheKey}`);
-      cache.set(cacheKey, respData);
-    }
-
-    console.log(`Total RPC calls made: ${rpcCallCount}`); // Log the total count
-    return respData;
-  } catch (error) {
-    try {
-      console.error("Error in getAllTokenBalanceHistory:", error);
-      cache.del(cacheKey);
-
-      const result = await prisma.tokenBalanceHistory.findMany({
-        where: {
-          account_id,
-          token_id,
-        },
-        orderBy: {
-          timestamp: "asc",
-        },
-        distinct: ["period"],
-      });
-      console.log(
-        `439 Returning from cache for ${account_id} and ${token_id} and ${result.length} periods`
-      );
-      const resultJson = result.reduce(
-        (acc: Record<string, any>, item: any) => {
-          acc[item.period] = item.balance_history;
-          return acc;
-        },
-        {}
-      );
-
-      return resultJson;
-    } catch (error) {
-      console.log(`Error in fallback getAllTokenBalanceHistory: ${error}`);
-      return Object.fromEntries(periodMap.map(({ period }) => [period, []]));
-    }
+    return fallback.reduce((acc: any, entry: any) => {
+      acc[entry.period] = Array.isArray(entry.balance_history)
+        ? entry.balance_history
+        : [];
+      return acc;
+    }, {} as Record<string, BalanceHistoryEntry[]>);
   }
 }

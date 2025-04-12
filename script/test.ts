@@ -23,7 +23,6 @@ interface EndpointResponse {
 }
 
 const endpoints = [
-  // '/api/token-metadata',
   // '/api/whitelist-tokens', I made some changes to whitelist-tokens so they differ
   "/api/swap",
   "/api/near-price",
