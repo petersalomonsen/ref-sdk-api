@@ -1,10 +1,12 @@
 name: Twice Weekly Production API Tests
 
 on:
- push:
-    branches: [main]
+  push:
+    branches:
+      - main
   pull_request:
-    branches: [main]
+    branches:
+      - main
   schedule:
     - cron: "0 9 * * 1" # Every Monday at 09:00 UTC
     - cron: "0 9 * * 4" # Every Thursday at 09:00 UTC
