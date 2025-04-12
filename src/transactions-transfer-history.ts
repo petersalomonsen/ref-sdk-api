@@ -122,10 +122,7 @@ export async function getTransactionsTransferHistory(
         return sortByDate(data.slice(0, endIndex));
       }
     } catch (fallbackError) {
-      console.error(
-        "Failed to retrieve fallback cached data:",
-        fallbackError
-      );
+      console.error("Failed to retrieve fallback cached data:", fallbackError);
     }
 
     throw new Error("Failed to retrieve transaction history.");
