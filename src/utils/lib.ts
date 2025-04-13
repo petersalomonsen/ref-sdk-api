@@ -298,70 +298,6 @@ type StakeCache = {
   set: (key: string, value: any, ttl: number) => void;
 };
 
-export async function getUserStakePoolsForBlockHeights(
-  account_id: string,
-  block_heights: number[],
-  cache: StakeCache
-) {
-  if (!account_id) {
-    throw new Error("Account ID is required");
-  }
-
-  const results: Record<number, string[]> = {}; // Store pools for each block height
-
-  // Check cache for each block height
-  const missingBlockHeights: number[] = [];
-  for (const block_height of block_heights) {
-    const cacheKey = `${account_id}-${block_height}-stake-pools`;
-    const cachedData = cache.get(cacheKey);
-    if (cachedData) {
-      console.log(`Cached response for key: ${cacheKey}`);
-      results[block_height] = cachedData;
-    } else {
-      missingBlockHeights.push(block_height);
-    }
-  }
-
-  if (missingBlockHeights.length === 0) {
-    return results; // All data was found in the cache
-  }
-
-  if (!process.env.NEARBLOCKS_API_KEY) {
-    throw new Error("NEARBLOCKS_API_KEY is not set");
-  }
-
-  // Fetch staking transactions if at least one block height is missing from cache
-  const { data } = await axios.get(
-    `https://api3.nearblocks.io/v1/account/${account_id}/stake-txns?per_page=75`,
-    {
-      headers: {
-        Authorization: `Bearer ${process.env.NEARBLOCKS_API_KEY}`,
-      },
-    }
-  );
-
-  if (!Array.isArray(data?.txns)) {
-    throw new Error("Invalid response from NEARBlocks API");
-  }
-
-  for (const block_height of missingBlockHeights) {
-    const userStakedPools = Array.from(
-      new Set(
-        data.txns
-          .filter((txn: any) => txn.block.block_height <= block_height)
-          .map((txn: any) => txn.receiver_account_id)
-      )
-    );
-
-    results[block_height] = userStakedPools as string[];
-
-    // Cache the result
-    const cacheKey = `${account_id}-${block_height}-stake-pools`;
-    cache.set(cacheKey, userStakedPools, 600); // Cache for 10 minutes
-  }
-  return results;
-}
-
 export async function getUserStakeBalances(
   account_id: string,
   blockHeights: number[],
@@ -373,28 +309,28 @@ export async function getUserStakeBalances(
     throw new Error("Account ID is required");
   }
 
-  const stakedPools = await getUserStakePoolsForBlockHeights(
-    account_id,
-    blockHeights,
-    cache
+  const { data } = await axios.get(
+    `https://api.fastnear.com/v1/account/${account_id}/staking`,
+    {
+      headers: {
+        Authorization: `Bearer ${process.env.FASTNEAR_API_KEY}`,
+      },
+    }
   );
+
+  const stakedPools = (data?.pools ?? [])?.map((i: any) => i.pool_id);
   const results: number[] = new Array(blockHeights.length).fill(0); // Store total balance per blockHeight
-  const balanceCache: Record<string, number> = {};
 
   await Promise.all(
     blockHeights.map(async (block_id, index) => {
-      if (!stakedPools[block_id] || stakedPools[block_id].length === 0) {
-        return; // No pools at this block height, total balance remains 0
-      }
-
       const balances = await Promise.all(
-        stakedPools[block_id].map(async (pool) => {
+        stakedPools.map(async (pool: string) => {
           const cacheKey = `${account_id}-${block_id}-${pool}`;
 
-          // Return cached balance if available
-          if (balanceCache[cacheKey] !== undefined) {
+          const cachedBalance = cache.get(cacheKey);
+          if (cachedBalance !== undefined) {
             console.log("Cached response for key:", cacheKey);
-            return balanceCache[cacheKey];
+            return cachedBalance;
           }
 
           rpcCallCount++;
@@ -408,11 +344,7 @@ export async function getUserStakeBalances(
                 block_id,
                 account_id: pool,
                 method_name: "get_account_total_balance",
-                args_base64: btoa(
-                  JSON.stringify({
-                    account_id: account_id,
-                  })
-                ),
+                args_base64: btoa(JSON.stringify({ account_id })),
               },
             },
             false,
@@ -428,12 +360,15 @@ export async function getUserStakeBalances(
               )
             : 0;
 
-          balanceCache[cacheKey] = balance; // Cache the balance
+          cache.set(cacheKey, balance, 1200);
           return balance;
         })
       );
 
-      results[index] = balances.reduce((sum, balance) => sum + balance, 0); // Sum all pools' balances for the block
+      results[index] = balances.reduce(
+        (sum: any, balance: any) => sum + balance,
+        0
+      );
     })
   );
 

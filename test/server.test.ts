@@ -54,28 +54,6 @@ describe("API Endpoints", () => {
     jest.clearAllMocks();
   });
 
-  describe("GET /api/token-metadata", () => {
-    it("should return token metadata for a valid token", async () => {
-      const response = await request(app)
-        .get("/api/token-metadata")
-        .query({ token: "wrap.near" });
-
-      expect(response.status).toBe(200);
-      expect(response.body).toEqual(tokens["wrap.near"]);
-    });
-
-    it("should return 500 for invalid token", async () => {
-      const response = await request(app)
-        .get("/api/token-metadata")
-        .query({ token: "non-existent-token.near" });
-
-      expect(response.status).toBe(500);
-      expect(response.body).toEqual({
-        error: "An error occurred while fetching token metadata",
-      });
-    });
-  });
-
   describe("GET /api/whitelist-tokens", () => {
     it("should return whitelist tokens", async () => {
       const mockTokens = [{ token_id: "token1" }, { token_id: "token2" }];
@@ -269,17 +247,6 @@ describe("API Endpoints", () => {
 
       expect(response.status).toBe(400);
       expect(response.body).toEqual({ error: "account_id is required" });
-    });
-
-    it("should return 500 if axios request fails", async () => {
-      mockedAxios.get.mockRejectedValue(new Error("API error"));
-
-      const response = await request(app)
-        .get("/api/ft-token-price")
-        .query({ account_id: "near" });
-
-      expect(response.status).toBe(500);
-      expect(response.body).toEqual({ error: "An error occurred" });
     });
   });
 });

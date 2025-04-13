@@ -17,12 +17,16 @@ model TokenBalanceHistory {
   id              String   @id @default(uuid())
   account_id      String
   token_id        String
-  period          String   @default("1Y")
-  balance_history Json
+  period          String   // e.g., "1Y", "1M", "1W", etc.
+  balance_history Json     // Array of { timestamp, date, balance }
+  fromBlock       Int      // oldest block in the history
+  toBlock         Int      // latest block stored for this period
   timestamp       DateTime @default(now())
 
-  @@index([account_id, token_id, period, timestamp])
+  @@index([account_id, token_id, period])
+  @@unique([account_id, token_id, period], name: "account_id_token_id_period")
 }
+
 
 model RpcRequest {
   id           String   @id @default(uuid())
@@ -59,4 +63,10 @@ model AccountBlockExistence {
 
   @@unique([accountId, blockHeight])
   @@index([accountId, blockHeight])
+}
+
+model TransferHistory {
+  cacheKey   String   @id
+  data       Json
+  timestamp  DateTime @default(now())
 }

@@ -110,20 +110,6 @@ By default, the server will run on `http://127.0.0.1:3000` (or as specified by t
 
 ## API Endpoints
 
-### Get Token Metadata
-
-- **Endpoint:** `GET /api/token-metadata`
-- **Query Parameters:**
-  - `token` (string, required): The token ID for which to retrieve metadata.
-- **Response:** JSON object containing metadata for the token.
-- **Example:**
-
-  ```http
-  GET /api/token-metadata?token=near
-  ```
-
----
-
 ### Whitelist Tokens
 
 - **Endpoint:** `GET /api/whitelist-tokens`
@@ -201,19 +187,6 @@ By default, the server will run on `http://127.0.0.1:3000` (or as specified by t
 
 ---
 
-### Clear Token Balance History
-
-- **Endpoint:** `DELETE /api/clear-token-balance-history`
-- **Description:** Removes all `TokenBalanceHistory` records from the database.
-- **Response:** JSON message confirming deletion.
-- **Example:**
-
-  ```http
-  DELETE /api/clear-token-balance-history
-  ```
-
----
-
 ### Transactions Transfer History
 
 - **Endpoint:** `GET /api/transactions-transfer-history`
@@ -230,12 +203,13 @@ By default, the server will run on `http://127.0.0.1:3000` (or as specified by t
 
 ## Caching & Rate Limiting
 
-- **Caching:**  
+- **Caching:**
+
   - The API uses [NodeCache](https://www.npmjs.com/package/node-cache) to store short-term responses (e.g., NEAR prices and token balance histories) to reduce external API calls and recomputation.
   - RPC calls (in `src/utils/fetch-from-rpc.ts`) also cache responses and skip endpoints temporarily on rate-limited (HTTP 429) responses.
 
-- **Rate Limiting:**  
-  - All `/api/*` endpoints are limited to 180 requests per 30 seconds per IP (or forwarded IP when available).  
+- **Rate Limiting:**
+  - All `/api/*` endpoints are limited to 180 requests per 30 seconds per IP (or forwarded IP when available).
   - This helps protect against abuse and ensures service stability.
 
 ---
@@ -257,4 +231,4 @@ This project is licensed under the MIT License. See [LICENSE](LICENSE) for more 
 
 ---
 
-*For additional questions or contributions, please open an issue or submit a PR on GitHub.*
+_For additional questions or contributions, please open an issue or submit a PR on GitHub._

@@ -40,25 +40,7 @@ app.use(express.json());
 app.use("/api/", apiLimiter);
 
 const NodeCache = require("node-cache");
-const cache = new NodeCache({ stdTTL: 30, checkperiod: 30 }); // Cache for 30 sec
-
-app.get("/api/token-metadata", async (req: Request, res: Response) => {
-  try {
-    const { token } = req.query as { token: string };
-    const tokenMetadata = tokens[token as keyof typeof tokens];
-    if (!tokenMetadata) {
-      return res.status(500).json({
-        error: "An error occurred while fetching token metadata",
-      });
-    }
-    res.json(tokenMetadata);
-  } catch (error) {
-    console.log(error);
-    return res.status(500).json({
-      error: "An error occurred while fetching token metadata",
-    });
-  }
-});
+const cache = new NodeCache({ stdTTL: 120 }); // Cache for 2 minutes
 
 app.get("/api/whitelist-tokens", async (req: Request, res: Response) => {
   try {
@@ -68,7 +50,7 @@ app.get("/api/whitelist-tokens", async (req: Request, res: Response) => {
   } catch (error) {
     console.error(error);
     return res.status(500).json({
-      error: "An error occurred while fetching tokens and balances",
+      error: "An error occurred while fetching whitelisted tokens and balances",
     });
   }
 });
@@ -137,31 +119,33 @@ app.get("/api/ft-tokens", async (req: Request, res: Response) => {
     if (!account_id || typeof account_id !== "string") {
       return res.status(400).json({ error: "Account ID is required" });
     }
-
     const result = await getFTTokens(account_id, cache);
     return res.json(result);
   } catch (error) {
-    const result = await prisma.fTToken.findFirst({
-      where: {
-        account_id: req.query.account_id as string,
-      },
-      orderBy: {
-        timestamp: "desc",
-      },
-    });
-    console.error("Error fetching FT tokens:", error);
-    if (error instanceof Error && error.message === "No FT tokens found") {
-      return res.status(404).json({ error: error.message });
+    try {
+      const result = await prisma.fTToken.findFirst({
+        where: {
+          account_id: req.query.account_id as string,
+        },
+        orderBy: {
+          timestamp: "desc",
+        },
+      });
+      return res.status(200).json(result);
+    } catch (error) {
+      console.error("Error fetching FT tokens:", error);
+      if (error instanceof Error && error.message === "No FT tokens found") {
+        return res.status(404).json({ error: error.message });
+      }
+      return res.status(500).json({ error: "Internal server error" });
     }
-    return res.status(500).json({ error: "Internal server error" });
   }
 });
 
-// Add this new endpoint before the server.listen call
 app.get(
   "/api/all-token-balance-history",
   async (req: Request, res: Response) => {
-    const { account_id, token_id, disableCache } = req.query;
+    const { account_id, token_id } = req.query;
 
     if (
       !account_id ||
@@ -169,91 +153,28 @@ app.get(
       typeof account_id !== "string" ||
       typeof token_id !== "string"
     ) {
-      return res
-        .status(400)
-        .json({ error: "Missing required parameters account_id and token_id" });
+      return res.status(400).json({
+        error: "Missing required parameters: account_id and token_id",
+      });
     }
 
+    const cacheKey = `all:${account_id}:${token_id}`;
+
     try {
-      const multipleUserKey = `all:${account_id}:${token_id}`;
-      const isCached = cache.get(multipleUserKey);
-      if (isCached && !disableCache) {
-        console.log(
-          `Cache hit for all-token-balance-history for ${account_id} and ${token_id}`
-        );
-        return res.json(isCached);
-      }
-
-      // This happens when it is not cached and the front end is requesting 3x in a second due to BOS limitations with config
-      const ip = req.ip;
-      const tooManyRequestKey = `all-token-balance-history:${ip}:${account_id}:${token_id}`;
-      if (cache.get(tooManyRequestKey)) {
-        const result = await prisma.tokenBalanceHistory.findMany({
-          where: {
-            account_id,
-            token_id,
-          },
-          orderBy: {
-            timestamp: "desc",
-          },
-          distinct: ["period"],
-        });
-        console.log(
-          `439 Returning from cache for ${account_id} and ${token_id} and ${result.length} periods`
-        );
-        const resultJson = result.reduce(
-          (acc: Record<string, any>, item: any) => {
-            acc[item.period] = item.balance_history;
-            return acc;
-          },
-          {}
-        );
-        return res.status(200).json(resultJson);
-      }
-
-      cache.set(tooManyRequestKey, true, 2);
-
       const result = await getAllTokenBalanceHistory(
         cache,
-        multipleUserKey,
+        cacheKey,
         account_id,
         token_id
       );
       return res.json(result);
     } catch (error) {
-      console.error("Error fetching all balance history:", error);
-
-      const result = await prisma.tokenBalanceHistory.findMany({
-        where: {
-          account_id,
-          token_id,
-        },
-        orderBy: {
-          timestamp: "desc",
-        },
-        distinct: ["period"],
-      });
-
-      const resultJson = result.reduce(
-        (acc: Record<string, any>, item: any) => {
-          acc[item.period] = item.balance_history;
-          return acc;
-        },
-        {}
+      console.error(
+        "Unhandled error in /api/all-token-balance-history:",
+        error
       );
-      return res.status(200).json(resultJson);
+      return res.status(500).json({ error: "Internal server error" });
     }
-  }
-);
-
-// Create a endpoint that removes all TokenBalanceHistory from the database
-app.delete(
-  "/api/clear-token-balance-history",
-  async (req: Request, res: Response) => {
-    await prisma.tokenBalanceHistory.deleteMany();
-    return res
-      .status(200)
-      .json({ message: "All TokenBalanceHistory removed from the database" });
   }
 );
 
@@ -267,7 +188,7 @@ app.get(
         return res.status(400).send({ error: "treasuryDaoID is required" });
       }
 
-      const data = await getTransactionsTransferHistory(params, cache);
+      const data = await getTransactionsTransferHistory(params);
       return res.send({ data });
     } catch (error) {
       console.error("Error fetching data:", error);
@@ -279,11 +200,20 @@ app.get(
 app.get("/api/ft-token-price", async (req: Request, res: Response) => {
   try {
     const { account_id } = req.query;
-    if (!account_id) {
+
+    if (!account_id || typeof account_id !== "string") {
       return res.status(400).send({ error: "account_id is required" });
     }
 
     const contract = account_id === "near" ? "wrap.near" : account_id;
+    const cacheKey = `ft-price:${contract}`;
+
+    const cachedPrice = cache.get(cacheKey);
+    if (cachedPrice !== undefined) {
+      console.log(`🔁 Returning cached price for ${contract}`);
+      return res.send({ price: cachedPrice });
+    }
+
     const { data } = await axios.get(
       `https://api.nearblocks.io/v1/fts/${contract}`,
       {
@@ -292,11 +222,15 @@ app.get("/api/ft-token-price", async (req: Request, res: Response) => {
         },
       }
     );
+
     const contractData = data?.contracts?.[0];
-    return res.send({ price: parseFloat(contractData.price) || 0 });
+    const price = parseFloat(contractData?.price) || 0;
+
+    cache.set(cacheKey, price);
+    return res.send({ price });
   } catch (error) {
-    console.error("Error fetching data:", error);
-    return res.status(500).send({ error: "An error occurred" });
+    console.error("Error fetching token price:", error);
+    return res.status(500).send({ error: "Failed to fetch token price" });
   }
 });
 

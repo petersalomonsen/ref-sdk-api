@@ -115,6 +115,7 @@ export async function fetchFromRPC(
 
       const response = await axios.post(endpoint, body, {
         headers,
+        timeout: 10_000,
       });
 
       // Axios automatically throws on non-2xx responses and parses JSON
