@@ -4,7 +4,7 @@ import https from "https";
 axios.defaults.httpsAgent = new https.Agent({ keepAlive: false });
 axios.defaults.timeout = 10_000;
 
-const BASE_URL = "https://ref-sdk-test-cold-haze-1300-2.fly.dev";
+const BASE_URL = "https://ref-sdk-api-2.fly.dev";
 
 // List of accounts to test
 const accounts = [
