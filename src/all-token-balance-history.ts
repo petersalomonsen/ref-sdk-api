@@ -52,11 +52,29 @@ function formatLabel(timestamp: number, period: string): string {
   }
 }
 
-type BalanceHistoryEntry = { timestamp: number; date: string; balance: string };
+type BalanceHistoryEntry = {
+  timestamp: number;
+  date: string;
+  balance: string;
+};
+
 type AllTokenBalanceHistoryCache = {
   get: (key: string) => any;
   set: (key: string, value: any, ttl?: number) => void;
   del: (key: string) => void;
+};
+
+const groupByPeriod = (history: BalanceHistoryEntry[]) => {
+  const grouped = new Map<string, BalanceHistoryEntry>();
+
+  for (const entry of history) {
+    const key = entry.date;
+    if (!grouped.has(key) || entry.timestamp > grouped.get(key)!.timestamp) {
+      grouped.set(key, entry);
+    }
+  }
+
+  return Object.fromEntries(grouped);
 };
 
 export async function getAllTokenBalanceHistory(
@@ -142,20 +160,14 @@ export async function getAllTokenBalanceHistory(
           };
         }
 
-        // Clamp the number of steps to the intended interval count
-        const totalSteps = Math.min(
+        let totalSteps = Math.min(
           interval,
           Math.floor((currentBlock - lastStoredBlock) / blocksPerStep)
         );
 
         if (totalSteps <= 0) {
           console.log(`[${period}] [${account_id}]  No new steps to fetch.`);
-          return {
-            period,
-            data: Array.isArray(prev?.balance_history)
-              ? prev.balance_history
-              : [],
-          };
+          totalSteps = 1;
         }
 
         const blockHeights = Array.from(
@@ -234,7 +246,6 @@ export async function getAllTokenBalanceHistory(
         let stakeBalances: any[] = [];
         if (token_id === "near") {
           // fetch all pools where user has staked near and get the balance for each at each blockheights
-
           stakeBalances = await getUserStakeBalances(
             account_id,
             blockHeights,
@@ -258,17 +269,25 @@ export async function getAllTokenBalanceHistory(
             balance = raw ? raw.replace(/"/g, "") : "0";
           }
 
+          const ts = timestamps[index];
+
           return {
-            timestamp: timestamps[index],
-            date: formatLabel(timestamps[index], period),
+            timestamp: ts,
+            date: formatLabel(ts, period),
             balance: convertFTBalance(balance, decimals),
           };
         });
 
-        const fullHistory = [
+        const groupedHistory = groupByPeriod(newHistory);
+
+        const mergedHistory = [
           ...((prev?.balance_history as BalanceHistoryEntry[]) || []),
-          ...newHistory,
-        ].slice(-interval);
+          ...Object.values(groupedHistory),
+        ];
+
+        const finalHistory = Object.values(groupByPeriod(mergedHistory)).slice(
+          -interval
+        );
 
         if (prev) {
           await prisma.tokenBalanceHistory.update({
@@ -280,7 +299,7 @@ export async function getAllTokenBalanceHistory(
               },
             },
             data: {
-              balance_history: fullHistory,
+              balance_history: finalHistory,
               toBlock: currentBlock,
             },
           });
@@ -290,14 +309,14 @@ export async function getAllTokenBalanceHistory(
               account_id,
               token_id,
               period,
-              balance_history: fullHistory,
+              balance_history: finalHistory,
               fromBlock: blockHeights[0],
               toBlock: currentBlock,
             },
           });
         }
 
-        return { period, data: fullHistory };
+        return { period, data: finalHistory };
       })
     );
 
