@@ -15,6 +15,7 @@ import {
 import prisma from "./prisma";
 import { tokens } from "./constants/tokens";
 import axios from "axios";
+import treasuryRoutes from "./routes/metrics";
 
 dotenv.config();
 
@@ -38,6 +39,7 @@ app.use(cors());
 app.use(helmet());
 app.use(express.json());
 app.use("/api/", apiLimiter);
+app.use("/", treasuryRoutes);
 
 const NodeCache = require("node-cache");
 const cache = new NodeCache({ stdTTL: 120 }); // Cache for 2 minutes
@@ -141,6 +143,7 @@ app.get("/api/ft-tokens", async (req: Request, res: Response) => {
     }
   }
 });
+
 
 app.get(
   "/api/all-token-balance-history",
