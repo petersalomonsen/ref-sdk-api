@@ -1,7 +1,10 @@
 import express, { Request, Response } from "express";
 import axios from "axios";
 import prisma from "../prisma";
-import { updateSheet } from "../utils/google-sheet";
+import {
+  updateReportSheet,
+  updateTransactionsReportSheet,
+} from "../utils/google-sheet";
 import { fetchFromRPC } from "../utils/fetch-from-rpc";
 import Big from "big.js";
 import { sha256 } from "js-sha256";
@@ -9,15 +12,55 @@ import { sha256 } from "js-sha256";
 const router = express.Router();
 const factoryAccount = "treasury-factory.near";
 
-type TreasuryReportRow = {
-  customerName: string;
-  treasuryUrl: string;
-  totalAssetsValueUSD: number;
-  numberOfUsers: number;
-  monthlyTransactions: number;
-  daoAssetsValueUSD: number;
-  lockupContract: string;
-  lockupValueUSD: number;
+interface FtMeta {
+  name: string;
+  symbol: string;
+  decimals: number;
+  icon?: string;
+  reference?: string | null;
+  price?: number;
+}
+
+interface FtToken {
+  contract: string;
+  amount: string;
+  ft_meta: FtMeta;
+}
+
+type Proposal = {
+  id: number;
+  proposer: string;
+  description: string;
+  status: string;
+  vote_counts: {
+    Approver: number[];
+  };
+  votes: Record<string, string>;
+  submission_time: string;
+  last_actions_log: string | null;
+};
+
+type FunctionCallProposal = Proposal & {
+  kind: {
+    FunctionCall: {
+      actions: {
+        method_name: string;
+        args?: string;
+        deposit?: string;
+        gas?: string;
+      }[];
+    };
+    receiver_id: string;
+  };
+};
+
+type TransferProposal = Proposal & {
+  kind: {
+    Transfer: {
+      amount: string;
+      token_id: string;
+    };
+  };
 };
 
 function accountToLockup(accountId: string) {
@@ -167,121 +210,470 @@ router.get("/db/store-treasuries", async (_req, res) => {
 });
 
 router.post("/db/insert-treasury", async (req: Request, res: Response) => {
-  const { name, createdAt, createdBy, instanceAccount, daoAccount } = req.body;
+  const payload = Array.isArray(req.body) ? req.body : [req.body];
 
-  if (!name || !createdAt || !createdBy) {
-    return res
-      .status(400)
-      .json({ error: "Missing name, createdAt, or createdBy" });
+  const results = [];
+
+  for (const entry of payload) {
+    const { name, createdAt, createdBy, instanceAccount, daoAccount } = entry;
+
+    if (!name || !createdAt || !createdBy) {
+      results.push({
+        name,
+        status: "failed",
+        reason: "Missing name, createdAt, or createdBy",
+      });
+      continue;
+    }
+
+    try {
+      await insertTreasuryToDb({
+        createdAt: new Date(createdAt),
+        createdBy,
+        instanceAccount,
+        daoAccount,
+        name,
+      });
+      results.push({ name, status: "success" });
+    } catch (err) {
+      console.error(`❌ Failed to insert treasury ${name}:`, err);
+      results.push({
+        name,
+        status: "failed",
+        reason: "Database insert failed",
+      });
+    }
   }
 
-  try {
-    await insertTreasuryToDb({
-      createdAt: new Date(createdAt),
-      createdBy,
-      instanceAccount,
-      daoAccount,
-      name,
-    });
-    return res.send({ message: "Successfully stored treasury to database" });
-  } catch (err) {
-    console.error("❌ Failed to insert treasury:", err);
-    res.status(500).json({ error: "Database insert failed" });
-  }
+  return res.send({
+    message: "Insert operation completed",
+    results,
+  });
 });
+
+function getParsedTokenAmount(token: FtToken) {
+  return Number(
+    Big(token?.amount ?? "0")
+      .div(Big(10).pow(token?.ft_meta?.decimals ?? 0))
+      .toFixed()
+  );
+}
+
+async function getTreasuiresForReport() {
+  try {
+    const treasuries = await prisma.treasury.findMany();
+    // Filter out test treasuries
+    const filteredTreasuries = treasuries.filter(
+      (t: any) =>
+        !t.daoAccount?.includes("testing") &&
+        !t.instanceAccount?.includes("test") &&
+        !t.instanceAccount?.includes("sdfwefw")
+    );
+    return filteredTreasuries;
+  } catch (e) {
+    console.log("Error while fetching treasuries");
+  }
+}
 
 router.get("/db/treasuries-report", async (_req, res) => {
   try {
-    const treasuries = await prisma.treasury.findMany();
+    const treasuries = await getTreasuiresForReport();
 
-    // Get current NEAR price from your API
     const { data: nearPriceResp } = await axios.get(
       "https://ref-sdk-test-cold-haze-1300-2.fly.dev/api/near-price"
     );
     const nearPrice = Big(nearPriceResp || 0);
 
-    const reportData: TreasuryReportRow[] = [];
+    const reportData = await Promise.all(
+      (treasuries ?? []).map(async (treasury: any) => {
+        try {
+          let daoBalance = Big(0);
+          let totalAssets = Big(0);
 
-    for (const treasury of treasuries) {
-      let daoBalance = Big(0);
-      let totalAssets = Big(0);
-      const promises = [
-        fetchFTBalances(treasury.daoAccount),
-        fetchNearBalances(treasury.daoAccount),
-        fetchFromRPC(
-          {
-            jsonrpc: "2.0",
-            id: "policy",
-            method: "query",
-            params: {
-              request_type: "call_function",
-              finality: "final",
-              method_name: "get_policy",
-              account_id: treasury.daoAccount,
-              args_base64: "",
+          const promises = [
+            fetchFTBalances(treasury.daoAccount),
+            fetchNearBalances(treasury.daoAccount),
+            fetchFromRPC(
+              {
+                jsonrpc: "2.0",
+                id: "policy",
+                method: "query",
+                params: {
+                  request_type: "call_function",
+                  finality: "final",
+                  method_name: "get_policy",
+                  account_id: treasury.daoAccount,
+                  args_base64: "",
+                },
+              },
+              false
+            ),
+            treasury.lockupContract
+              ? fetchNearBalances(treasury.lockupContract)
+              : Promise.resolve(null),
+          ];
+
+          const [ftBalance, nearBalanceResp, policyResp, lockupBalanceResp] =
+            await Promise.all(promises);
+
+          const nearAmount = Big(nearBalanceResp?.["1H"]?.[0]?.balance || "0");
+          const nearUSD = nearAmount.times(nearPrice);
+
+          const ftAssetsUSD = Big(ftBalance?.totalCumulativeAmt || 0);
+
+          const totalAssetsUSD = ftAssetsUSD.plus(nearUSD);
+          daoBalance = daoBalance.plus(totalAssetsUSD);
+          totalAssets = totalAssets.plus(totalAssetsUSD);
+
+          const usdcToken = (ftBalance?.fts ?? []).find(
+            (i: FtToken) =>
+              i.contract ===
+              "17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1"
+          );
+
+          const usdcAmount = getParsedTokenAmount(usdcToken);
+
+          const usdtToken = (ftBalance?.fts ?? []).find(
+            (i: FtToken) => i.contract === "usdt.tether-token.near"
+          );
+          const usdtAmount = getParsedTokenAmount(usdtToken);
+
+          const otherTokens = (ftBalance?.fts ?? []).filter(
+            (i: FtToken) =>
+              i.contract !== "usdt.tether-token.near" &&
+              i.contract !==
+                "17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1"
+          );
+          const otherTokensTotal = otherTokens.reduce(
+            (acc: any, token: FtToken) => {
+              const parsedAmount = getParsedTokenAmount(token);
+              return acc.plus(parsedAmount);
             },
-          },
-          false
-        ),
-      ];
+            Big(0)
+          );
 
-      // Conditionally add lockup balance fetch
-      if (treasury.lockupContract) {
-        promises.push(fetchNearBalances(treasury.lockupContract));
-      } else {
-        promises.push(Promise.resolve(null));
-      }
+          const otherAmount = Number(otherTokensTotal.toFixed());
 
-      const [ftBalance, nearBalanceResp, policyResp, lockupBalanceResp] =
-        await Promise.all(promises);
+          const rawPolicyString =
+            policyResp?.result?.result
+              ?.map((c: any) => String.fromCharCode(c))
+              .join("") ?? "{}";
 
-      // // Parse NEAR balance in USD
-      const nearAmount = Big(nearBalanceResp?.["1H"]?.[0]?.balance || "0");
-      const nearUSD = nearAmount.times(nearPrice);
+          const lockupBalance = Big(
+            lockupBalanceResp?.["1H"]?.[0]?.balance || "0"
+          );
+          const lockupBalanceUSD = lockupBalance.times(nearPrice);
 
-      // FT token balance
-      const ftAssetsUSD = Big(ftBalance?.totalCumulativeAmt || 0);
+          totalAssets = totalAssets.plus(lockupBalanceUSD);
 
-      // Total per treasury
-      const totalAssetsUSD = ftAssetsUSD.plus(nearUSD);
-      daoBalance = daoBalance.plus(totalAssetsUSD);
-      totalAssets = totalAssets.plus(totalAssetsUSD);
+          const policy = JSON.parse(rawPolicyString);
+          const allMembers =
+            policy.roles?.flatMap((r: any) => r.kind?.Group || []) || [];
+          const uniqueMembers = new Set(allMembers);
 
-      // Parse policy and unique members
-      const rawPolicyString =
-        policyResp?.result?.result
-          ?.map((c: number) => String.fromCharCode(c))
-          .join("") ?? "{}";
+          if (uniqueMembers.size === 0) return null;
 
-      const lockupBalance = Big(lockupBalanceResp?.["1H"]?.[0]?.balance || "0");
-      const lockupBalanceUSD = lockupBalance.times(nearPrice);
+          return {
+            treasuryUrl: `https://${treasury.instanceAccount}.page/`,
+            daoAssetsValueUSD: Number(daoBalance),
+            totalAssetsValueUSD: Number(totalAssets),
+            numberOfUsers: uniqueMembers.size,
+            monthlyTransactions: 0,
+            lockupContract: treasury.lockupContract ?? "-",
+            lockupValueUSD: Number(lockupBalanceUSD),
+            createdAt: new Date(treasury.createdAt).toLocaleDateString(
+              "en-US",
+              {
+                year: "numeric",
+                month: "long",
+                day: "2-digit",
+              }
+            ),
+            createdBy: treasury.createdBy,
+            nearAmount: Number(nearAmount.toFixed()),
+            usdcAmount,
+            usdtAmount,
+            otherAmount,
+          };
+        } catch (error) {
+          console.warn(`⚠️ Skipping treasury ${treasury.name}:`, error);
+          return null;
+        }
+      })
+    );
 
-      totalAssets = totalAssets.plus(lockupBalanceUSD);
-      const policy = JSON.parse(rawPolicyString);
-      const allMembers =
-        policy.roles?.flatMap((r: any) => r.kind?.Group || []) || [];
-      const uniqueMembers = new Set(allMembers);
-
-      if (uniqueMembers.size === 0) {
-        continue;
-      }
-      reportData.push({
-        customerName: treasury.name,
-        treasuryUrl: `https://${treasury.name}.near.page/`,
-        daoAssetsValueUSD: Number(daoBalance),
-        totalAssetsValueUSD: Number(totalAssets),
-        numberOfUsers: uniqueMembers.size,
-        monthlyTransactions: 0,
-        lockupContract: treasury.lockupContract ?? "-",
-        lockupValueUSD: Number(lockupBalanceUSD),
-      });
-    }
-
-    await updateSheet(reportData);
-    return res.status(200).json(reportData);
+    const cleanReport = reportData.filter(Boolean);
+    await updateReportSheet(cleanReport);
+    return res.status(200).json(cleanReport);
   } catch (err) {
     console.error("Error generating report:", err);
     res.status(500).json({ error: "Failed to generate report" });
+  }
+});
+
+// time for transactions report
+const startTime = 0;
+
+async function getTokenMetadata(tokenId: string) {
+  const { data: meta } = await axios.get(
+    `http://0.0.0.0:3000/api/ft-token-metadata?account_id=${tokenId}`
+  );
+  return meta;
+}
+
+async function getTokenAmountInUSD(tokenId: string, rawAmount: string) {
+  const actualTokenId = tokenId?.trim() || "near";
+  const meta = await getTokenMetadata(actualTokenId);
+
+  const amount = Big(rawAmount).div(Big(10).pow(meta.decimals));
+  const usdValue = amount.times(meta.price);
+  return {
+    amount: amount,
+    usdValue: usdValue,
+    symbol: actualTokenId === "near" ? "NEAR" : meta.symbol,
+  };
+}
+
+async function getPaymentStats(daoAccount: string): Promise<{
+  totalProposals: number;
+  tokenTotals: Record<string, { amount: Big; usdValue: Big }>;
+}> {
+  const { data: proposals }: { data: TransferProposal[] } = await axios.get(
+    `https://sputnik-indexer-divine-fog-3863.fly.dev/proposals/${daoAccount}?proposal_type=Transfer&keyword=title`
+  );
+
+  const filtered = proposals.filter((p) =>
+    Big(p.submission_time).gt(startTime)
+  );
+  // A record to store the total USD value and amount for each tokenId
+  const tokenTotals: Record<string, { amount: Big; usdValue: Big }> = {};
+
+  for (const p of filtered) {
+    const transfer = p.kind?.Transfer;
+    if (!transfer?.amount) continue;
+
+    const tokenId = transfer.token_id || "near";
+
+    const { amount, usdValue, symbol } = await getTokenAmountInUSD(
+      tokenId,
+      transfer.amount
+    );
+
+    // Add the USD value to the total USD value for that tokenId
+    if (tokenTotals[symbol]) {
+      tokenTotals[symbol].amount = tokenTotals[symbol].amount.plus(amount);
+      tokenTotals[symbol].usdValue =
+        tokenTotals[symbol].usdValue.plus(usdValue);
+    } else {
+      tokenTotals[symbol] = {
+        amount,
+        usdValue,
+      };
+    }
+  }
+
+  return {
+    totalProposals: filtered.length,
+    tokenTotals,
+  };
+}
+
+async function getStakeStats(daoAccount: string): Promise<{
+  totalProposals: number;
+  totalStakedAmount: Big;
+  totalStakedUSD: Big;
+}> {
+  // Fetch proposals of type 'FunctionCall' with 'stake' as a keyword
+  const { data: proposals }: { data: FunctionCallProposal[] } = await axios.get(
+    `https://sputnik-indexer-divine-fog-3863.fly.dev/proposals/${daoAccount}?proposal_type=FunctionCall&keyword=stake`
+  );
+
+  // Filter proposals based on the submission time
+  const filtered = proposals.filter((p) =>
+    Big(p.submission_time).gt(startTime)
+  );
+
+  // Initialize total variables for NEAR staked and its USD value
+  let totalStakedAmount = Big(0);
+  let totalStakedUSD = Big(0);
+
+  // Loop through each proposal
+  for (const p of filtered) {
+    const functionCall = p.kind?.FunctionCall;
+
+    if (!functionCall?.actions) continue;
+
+    // Loop through the actions to find the 'deposit' field
+    for (const action of functionCall.actions) {
+      if (action.method_name === "deposit_and_stake" && action.deposit) {
+        const depositAmount = Big(action.deposit).toFixed(); // NEAR deposited in the transaction
+
+        // Convert the NEAR deposit to USD
+        const { amount: stakeAmount, usdValue } = await getTokenAmountInUSD(
+          "near", // Token ID for NEAR
+          depositAmount
+        );
+
+        // Accumulate the total staked amount and its USD value
+        totalStakedAmount = totalStakedAmount.plus(stakeAmount);
+        totalStakedUSD = totalStakedUSD.plus(usdValue);
+      }
+    }
+  }
+
+  // Return the results
+  return {
+    totalProposals: filtered.length,
+    totalStakedAmount,
+    totalStakedUSD,
+  };
+}
+
+async function getAssetExchangeStats(daoAccount: string): Promise<{
+  totalProposals: number;
+  totalExchangeValueUSD: Big;
+  assetExchanged: string[];
+}> {
+  const { data: proposals }: { data: FunctionCallProposal[] } = await axios.get(
+    `https://sputnik-indexer-divine-fog-3863.fly.dev/proposals/${daoAccount}?proposal_type=FunctionCall&keyword=asset-exchange`
+  );
+
+  const filtered = proposals.filter((p) =>
+    Big(p.submission_time).gt(startTime)
+  );
+  let totalExchangeValueUSD = Big(0);
+  const assetExchanged: string[] = [];
+
+  for (const p of filtered) {
+    const description = p.description || "";
+
+    // Extract relevant details using regex
+    const tokenInMatch = description.match(/Token In:\s*(\S+)/i);
+    const tokenOutMatch = description.match(/Token Out:\s*(\S+)/i);
+    const amountInMatch = description.match(/Amount In:\s*([\d.]+)/i);
+    const amountOutMatch = description.match(/Amount Out:\s*([\d.]+)/i);
+
+    if (!tokenInMatch || !tokenOutMatch || !amountInMatch || !amountOutMatch)
+      continue;
+
+    const tokenIn = tokenInMatch[1].trim();
+    const tokenOut = tokenOutMatch[1].trim();
+    const amountIn = Big(amountInMatch[1]);
+    const amountOut = Big(amountOutMatch[1]);
+
+    // Convert token amounts to USD
+    const inUSD = await getTokenAmountInUSD(tokenIn, amountIn.toFixed());
+    const outUSD = await getTokenAmountInUSD(tokenOut, amountOut.toFixed());
+
+    // Calculate total exchange value in USD
+    totalExchangeValueUSD = totalExchangeValueUSD
+      .plus(inUSD.usdValue)
+      .plus(outUSD.usdValue);
+
+    // Record the asset exchange summary
+    assetExchanged.push(
+      `${amountIn.toFixed()} ${
+        inUSD.symbol
+      } exchanged for ${amountOut.toFixed()} ${outUSD.symbol}`
+    );
+  }
+
+  return {
+    totalProposals: filtered.length,
+    totalExchangeValueUSD,
+    assetExchanged,
+  };
+}
+
+async function getLockupStats(daoAccount: string): Promise<{
+  totalProposals: number;
+  totalLockupAmount: Big;
+  totalLockupUSD: Big;
+}> {
+  const { data: proposals }: { data: FunctionCallProposal[] } = await axios.get(
+    `https://sputnik-indexer-divine-fog-3863.fly.dev/proposals/${daoAccount}?proposal_type=FunctionCall&keyword=lockup`
+  );
+
+  const filtered = proposals.filter((p) =>
+    Big(p.submission_time).gt(startTime)
+  );
+
+  let totalLockupAmount = Big(0);
+  let totalLockupUSD = Big(0);
+
+  for (const p of filtered) {
+    const actions = p.kind?.FunctionCall?.actions;
+    if (!Array.isArray(actions)) continue;
+
+    for (const action of actions) {
+      if (action.method_name === "create" && action.deposit) {
+        const depositNear = Big(action.deposit).toFixed();
+
+        const { amount, usdValue } = await getTokenAmountInUSD(
+          "near",
+          depositNear
+        );
+
+        totalLockupAmount = totalLockupAmount.plus(amount);
+        totalLockupUSD = totalLockupUSD.plus(usdValue);
+      }
+    }
+  }
+
+  return {
+    totalProposals: filtered.length,
+    totalLockupAmount,
+    totalLockupUSD,
+  };
+}
+
+router.get("/db/treasuries-transactions-report", async (_req, res) => {
+  try {
+    const treasuries = await getTreasuiresForReport();
+    const reportData = await Promise.all(
+      (treasuries ?? []).map(async (treasury: any) => {
+        const daoAccount = treasury.daoAccount;
+
+        const [paymentStats, stakeStats, assetExchangeStats, lockupStats] =
+          await Promise.all([
+            getPaymentStats(daoAccount),
+            getStakeStats(daoAccount),
+            getAssetExchangeStats(daoAccount),
+            getLockupStats(daoAccount),
+          ]);
+
+        return {
+          treasuryUrl: `https://${treasury.instanceAccount}.page/`,
+          paymentProposals: paymentStats.totalProposals,
+          paymentTokens: Object.entries(paymentStats.tokenTotals)
+            .map(
+              ([tokenId, { amount, usdValue }]) =>
+                `Token: ${tokenId} | Amount: ${amount.toFixed()} | USD Value: $${usdValue.toFixed()}`
+            )
+            .join("\n"),
+          totalPaymentValue: Object.values(paymentStats.tokenTotals).reduce(
+            (total, { usdValue }) => total.plus(usdValue),
+            Big(0)
+          ),
+          exchangeProposals: assetExchangeStats.totalProposals,
+          exchangeTokens: assetExchangeStats.assetExchanged.join("\n"),
+          totalExchangeValue: assetExchangeStats.totalExchangeValueUSD,
+          stakeProposals: stakeStats.totalProposals,
+          totalStaked: stakeStats.totalStakedAmount,
+          totalStakedUSD: stakeStats.totalStakedUSD,
+          lockupProposals: lockupStats.totalProposals,
+          totalLockupNear: lockupStats.totalLockupAmount,
+          totalLockedValueUSD: lockupStats.totalLockupUSD,
+        };
+      })
+    );
+
+    const cleanReport = reportData.filter(Boolean);
+    await updateTransactionsReportSheet(cleanReport);
+    return res.status(200).json(cleanReport);
+  } catch (err) {
+    console.error("Error generating transactions report:", err);
+    res.status(500).json({ error: "Failed to generate transactions report" });
   }
 });
 
