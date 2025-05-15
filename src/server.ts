@@ -15,6 +15,7 @@ import {
 import prisma from "./prisma";
 import { tokens } from "./constants/tokens";
 import axios from "axios";
+import treasuryRoutes from "./routes/metrics";
 
 dotenv.config();
 
@@ -38,6 +39,7 @@ app.use(cors());
 app.use(helmet());
 app.use(express.json());
 app.use("/api/", apiLimiter);
+app.use("/", treasuryRoutes);
 
 const NodeCache = require("node-cache");
 const cache = new NodeCache({ stdTTL: 120 }); // Cache for 2 minutes
@@ -228,6 +230,41 @@ app.get("/api/ft-token-price", async (req: Request, res: Response) => {
 
     cache.set(cacheKey, price);
     return res.send({ price });
+  } catch (error) {
+    console.error("Error fetching token price:", error);
+    return res.status(500).send({ error: "Failed to fetch token price" });
+  }
+});
+
+app.get("/api/ft-token-metadata", async (req: Request, res: Response) => {
+  try {
+    const { account_id } = req.query;
+
+    if (!account_id || typeof account_id !== "string") {
+      return res.status(400).send({ error: "account_id is required" });
+    }
+
+    const contract = account_id === "near" ? "wrap.near" : account_id;
+    const cacheKey = `ft-metadata:${contract}`;
+
+    const cachedMetadata = cache.get(cacheKey);
+    if (cachedMetadata !== undefined) {
+      console.log(`🔁 Returning cached metadata for ${contract}`);
+      return res.send(cachedMetadata);
+    }
+
+    const { data } = await axios.get(
+      `https://api.nearblocks.io/v1/fts/${contract}`,
+      {
+        headers: {
+          Authorization: `Bearer ${process.env.NEARBLOCKS_API_KEY}`,
+        },
+      }
+    );
+
+    const metadata = data?.contracts?.[0];
+    cache.set(cacheKey, metadata);
+    return res.send(metadata);
   } catch (error) {
     console.error("Error fetching token price:", error);
     return res.status(500).send({ error: "Failed to fetch token price" });

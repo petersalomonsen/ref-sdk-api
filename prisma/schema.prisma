@@ -70,3 +70,13 @@ model TransferHistory {
   data       Json
   timestamp  DateTime @default(now())
 }
+
+model Treasury {
+  id        String   @id @default(uuid())
+  name      String   @unique
+  createdAt DateTime
+  createdBy String
+  instanceAccount String
+  daoAccount String
+  lockupContract String
+}

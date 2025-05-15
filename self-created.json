@@ -1,0 +1,58 @@
+[
+  {
+    "name": "auroradao",
+    "createdAt": "2025-02-14T12:00:00Z",
+    "createdBy": "manual",
+    "instanceAccount": "treasury-auroradao.near",
+    "daoAccount": "auroradao.sputnik-dao.near"
+  },
+  {
+    "name": "aurorafinance",
+    "createdAt": "2025-02-14T12:00:00Z",
+    "createdBy": "manual",
+    "instanceAccount": "aurorafinance.near",
+    "daoAccount": "aurorafinance.sputnik-dao.near"
+  },
+  {
+    "name": "auroralabs",
+    "createdAt": "2025-02-14T12:00:00Z",
+    "createdBy": "manual",
+    "instanceAccount": "treasury-auroralabs.near",
+    "daoAccount": "auroralabs.sputnik-dao.near"
+  },
+  {
+    "name": "infinex",
+    "createdAt": "2025-02-14T12:00:00Z",
+    "createdBy": "manual",
+    "instanceAccount": "treasury-infinex.near",
+    "daoAccount": "infinex.sputnik-dao.near"
+  },
+  {
+    "name": "near-prime",
+    "createdAt": "2025-02-14T12:00:00Z",
+    "createdBy": "manual",
+    "instanceAccount": "treasury-near-prime.near",
+    "daoAccount": "near-prime.sputnik-dao.near"
+  },
+  {
+    "name": "devdao",
+    "createdAt": "2025-02-14T12:00:00Z",
+    "createdBy": "manual",
+    "instanceAccount": "treasury-devdao.near",
+    "daoAccount": "devdao.sputnik-dao.near"
+  },
+  {
+    "name": "templar",
+    "createdAt": "2025-02-14T12:00:00Z",
+    "createdBy": "manual",
+    "instanceAccount": "treasury-templar.near",
+    "daoAccount": "templar.sputnik-dao.near"
+  },
+  {
+    "name": "shitzu",
+    "createdAt": "2025-02-14T12:00:00Z",
+    "createdBy": "manual",
+    "instanceAccount": "treasury-shitzu.near",
+    "daoAccount": "shitzu.sputnik-dao.near"
+  }
+]
