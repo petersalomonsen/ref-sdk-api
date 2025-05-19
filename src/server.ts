@@ -266,8 +266,42 @@ app.get("/api/ft-token-metadata", async (req: Request, res: Response) => {
     cache.set(cacheKey, metadata);
     return res.send(metadata);
   } catch (error) {
-    console.error("Error fetching token price:", error);
-    return res.status(500).send({ error: "Failed to fetch token price" });
+    console.error("Error fetching token metadata:", error);
+    return res.status(500).send({ error: "Failed to fetch token metadata" });
+  }
+});
+
+app.get("/api/user-daos", async (req: Request, res: Response) => {
+  try {
+    const { account_id } = req.query;
+
+    if (!account_id || typeof account_id !== "string") {
+      return res.status(400).send({ error: "account_id is required" });
+    }
+
+    
+    const cacheKey = `user-daos:${account_id}`;
+
+    const cachedDaos = cache.get(cacheKey);
+    if (cachedDaos !== undefined) {
+      console.log(`🔁 Returning cached Daos for ${account_id}`);
+      return res.send(cachedDaos);
+    }
+
+    const { data } = await axios.get(
+      `https://api.pikespeak.ai/daos/members`,
+      {
+        headers: {
+          "x-api-key": process.env.PIKESPEAK_KEY,
+        },
+      }
+    );
+    const userDaos = data?.[account_id]?.["daos"]  || []
+    cache.set(cacheKey, userDaos, 600); // 10 minutes
+    return res.send(userDaos);
+  } catch (error) {
+    console.error("Error fetching user daos:", error);
+    return res.status(500).send({ error: "Failed to fetch user daos" });
   }
 });
 
