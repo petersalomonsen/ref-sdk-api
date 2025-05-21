@@ -279,29 +279,108 @@ app.get("/api/user-daos", async (req: Request, res: Response) => {
       return res.status(400).send({ error: "account_id is required" });
     }
 
-    
     const cacheKey = `user-daos:${account_id}`;
-
     const cachedDaos = cache.get(cacheKey);
     if (cachedDaos !== undefined) {
       console.log(`🔁 Returning cached Daos for ${account_id}`);
       return res.send(cachedDaos);
     }
 
+    const { data } = await axios.get(`https://api.pikespeak.ai/daos/members`, {
+      headers: {
+        "x-api-key": process.env.PIKESPEAK_KEY,
+      },
+    });
+    const userDaos = data?.[account_id]?.["daos"] || [];
+    cache.set(cacheKey, userDaos, 600); // 10 minutes
+    return res.send(userDaos);
+  } catch (error) {
+    console.error("Error fetching user daos:", error);
+    return res.status(500).send({ error: "Failed to fetch user daos" });
+  }
+});
+
+app.get("/api/validator-details", async (req: Request, res: Response) => {
+  try {
+    const { account_id } = req.query;
+
+    if (!account_id || typeof account_id !== "string") {
+      return res.status(400).send({ error: "account_id is required" });
+    }
+    const cacheKey = `validator-details:${account_id}`;
+
+    const cachedValidatorDetails = cache.get(cacheKey);
+    if (cachedValidatorDetails !== undefined) {
+      console.log(`🔁 Returning cached validator-details`);
+      return res.send(cachedValidatorDetails);
+    }
+
     const { data } = await axios.get(
-      `https://api.pikespeak.ai/daos/members`,
+      `https://api.pikespeak.ai/validators/details/${account_id}`,
       {
         headers: {
           "x-api-key": process.env.PIKESPEAK_KEY,
         },
       }
     );
-    const userDaos = data?.[account_id]?.["daos"]  || []
-    cache.set(cacheKey, userDaos, 600); // 10 minutes
-    return res.send(userDaos);
+
+    cache.set(cacheKey, data, 60 * 60 * 24 * 7); // 7 days
+    return res.send(data);
   } catch (error) {
-    console.error("Error fetching user daos:", error);
-    return res.status(500).send({ error: "Failed to fetch user daos" });
+    console.error("Error fetching validator details:", error);
+    return res.status(500).send({ error: "Failed to fetch validator details" });
+  }
+});
+
+app.get("/api/validators", async (req: Request, res: Response) => {
+  try {
+    const cacheKey = `validators`;
+
+    const cachedValidators = cache.get(cacheKey);
+    if (cachedValidators !== undefined) {
+      console.log(`🔁 Returning cached validators`);
+      return res.send(cachedValidators);
+    }
+
+    const { data } = await axios.get(
+      `https://api.pikespeak.ai/validators/current`,
+      {
+        headers: {
+          "x-api-key": process.env.PIKESPEAK_KEY,
+        },
+      }
+    );
+    const validators = data?.map((item: any) => {
+      return {
+        pool_id: item.account_id,
+        fee: item.fees.numerator,
+      };
+    });
+    cache.set(cacheKey, validators, 60 * 60 * 24); // 1 day
+    return res.send(validators);
+  } catch (error) {
+    console.error("Error fetching validators:", error);
+    return res.status(500).send({ error: "Failed to fetch validators" });
+  }
+});
+
+app.delete("/api/rpc-request-db", async (req: Request, res: Response) => {
+  try {
+    // Delete all rows from RpcRequest table
+    await prisma.rpcRequest.deleteMany();
+
+    // Delete all rows from AccountBlockExistence table
+    await prisma.accountBlockExistence.deleteMany();
+
+    res
+      .status(200)
+      .send({
+        message:
+          "RpcRequest and AccountBlockExistence tables cleared successfully.",
+      });
+  } catch (error) {
+    console.error("Error clearing tables:", error);
+    res.status(500).send({ error: "Failed to clear tables" });
   }
 });
 
