@@ -372,16 +372,50 @@ app.delete("/api/rpc-request-db", async (req: Request, res: Response) => {
     // Delete all rows from AccountBlockExistence table
     await prisma.accountBlockExistence.deleteMany();
 
-    res
-      .status(200)
-      .send({
-        message:
-          "RpcRequest and AccountBlockExistence tables cleared successfully.",
-      });
+    res.status(200).send({
+      message:
+        "RpcRequest and AccountBlockExistence tables cleared successfully.",
+    });
   } catch (error) {
     console.error("Error clearing tables:", error);
     res.status(500).send({ error: "Failed to clear tables" });
   }
+});
+
+app.get("/api/search-ft", async (req: Request, res: Response) => {
+  try {
+    const { query } = req.query;
+
+    if (!query || typeof query !== "string") {
+      return res.status(400).send({ error: "query is required" });
+    }
+    const cacheKey = `search-ft-${query}`;
+
+    const cachedSearchedFt = cache.get(cacheKey);
+    if (cachedSearchedFt !== undefined) {
+      console.log(`🔁 Returning cached FT ${query}`);
+      return res.send(cachedSearchedFt);
+    }
+
+    const { data } = await axios.get(
+      `https://api.nearblocks.io/v1/fts/?search=${query}`,
+      {
+        headers: {
+          Authorization: `Bearer ${process.env.NEARBLOCKS_API_KEY}`,
+        },
+      }
+    );
+    const searchedFt = data?.tokens?.[0];
+    cache.set(cacheKey, searchedFt, 60 * 60 * 24); // 1 day
+    return res.send(searchedFt);
+  } catch (error) {
+    console.error("Error searching FT:", error);
+    return res.status(500).send({ error: "Failed to search FT" });
+  }
+});
+
+app.get("/headers", (req, res) => {
+  res.json({ headers: req.headers });
 });
 
 // Start the server

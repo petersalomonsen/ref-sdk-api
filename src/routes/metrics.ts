@@ -149,6 +149,23 @@ const fetchFTBalances = async (account_id: string) => {
   }
 };
 
+async function checkAccountExists(account: string) {
+  const resp = await fetchFromRPC(
+    {
+      jsonrpc: "2.0",
+      id: 1,
+      method: "query",
+      params: {
+        request_type: "view_account",
+        finality: "final",
+        account_id: account,
+      },
+    },
+    false
+  ).catch((e) => console.log(e));
+  return resp?.result?.amount !== undefined && resp?.result?.amount !== null;
+}
+
 router.get("/db/store-treasuries", async (_req, res) => {
   try {
     const { data } = await axios.get(
@@ -182,9 +199,23 @@ router.get("/db/store-treasuries", async (_req, res) => {
           try {
             const parsedArgs = JSON.parse(action.args);
             const name = parsedArgs.name;
+            if (!name) continue;
+            if ((name || "")?.endsWith(".near")) {
+              continue;
+            }
             const instanceAccount = name + ".near";
             const daoAccount = name + ".sputnik-dao.near";
-            if (!name) continue;
+            const checkInstanceAccountExist = await checkAccountExists(
+              instanceAccount
+            );
+            if (!checkInstanceAccountExist) {
+              continue;
+            }
+            const checkDAOAccountExist = await checkAccountExists(daoAccount);
+            if (!checkDAOAccountExist) {
+              continue;
+            }
+
             await insertTreasuryToDb({
               createdAt,
               createdBy,
@@ -227,6 +258,17 @@ router.post("/db/insert-treasury", async (req: Request, res: Response) => {
     }
 
     try {
+      const checkInstanceAccountExist = await checkAccountExists(
+        instanceAccount
+      );
+      if (!checkInstanceAccountExist) {
+        continue;
+      }
+      const checkDAOAccountExist = await checkAccountExists(daoAccount);
+      if (!checkDAOAccountExist) {
+        continue;
+      }
+
       await insertTreasuryToDb({
         createdAt: new Date(createdAt),
         createdBy,
@@ -263,14 +305,19 @@ async function getTreasuiresForReport() {
   try {
     const treasuries = await prisma.treasury.findMany();
     // Filter out test treasuries
-    const filteredTreasuries = treasuries.filter(
-      (t: any) =>
-        !t.daoAccount?.includes("testing") &&
-        !t.instanceAccount?.includes("test") &&
-        !t.daoAccount?.includes("demo") &&
-        !t.instanceAccount?.includes("sdfwefw") &&
-        !t.daoAccount?.includes("astradao-staging.sputnik-dao.near")
-    );
+    const filteredTreasuries = treasuries
+      .filter(
+        (t: any) =>
+          !t.daoAccount?.includes("testing") &&
+          !t.instanceAccount?.includes("test") &&
+          !t.daoAccount?.includes("demo") &&
+          !t.instanceAccount?.includes("sdfwefw") &&
+          !t.daoAccount?.includes("astradao-staging.sputnik-dao.near")
+      )
+      .sort(
+        (a: any, b: any) =>
+          new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+      );
     return filteredTreasuries;
   } catch (e) {
     console.log("Error while fetching treasuries");
@@ -318,7 +365,10 @@ router.get("/db/treasuries-report", async (_req, res) => {
           const [ftBalance, nearBalanceResp, policyResp, lockupBalanceResp] =
             await Promise.all(promises);
 
-          const nearAmount = Big(nearBalanceResp?.["1H"]?.[0]?.balance || "0");
+          const nearAmount = Big(
+            nearBalanceResp?.["1H"]?.[nearBalanceResp?.["1H"]?.length - 1]
+              ?.balance || "0"
+          );
           const nearUSD = nearAmount.times(nearPrice);
 
           const ftAssetsUSD = Big(ftBalance?.totalCumulativeAmt || 0);
@@ -373,8 +423,6 @@ router.get("/db/treasuries-report", async (_req, res) => {
             policy.roles?.flatMap((r: any) => r.kind?.Group || []) || [];
           const uniqueMembers = new Set(allMembers);
 
-          if (uniqueMembers.size === 0) return null;
-
           return {
             treasuryUrl: `https://${treasury.instanceAccount}.page/`,
             daoAssetsValueUSD: Number(daoBalance),
@@ -414,7 +462,7 @@ router.get("/db/treasuries-report", async (_req, res) => {
 });
 
 // time for transactions report
-const startTime = 0;
+const startTime = 1749031920000000000;
 
 async function getTokenMetadata(tokenId: string) {
   const { data: meta } = await axios.get(

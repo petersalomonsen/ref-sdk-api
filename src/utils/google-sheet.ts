@@ -1,3 +1,4 @@
+import Big from "big.js";
 import { google } from "googleapis";
 import * as path from "path";
 
@@ -189,11 +190,6 @@ export async function updateReportSheet(reportData: any[]) {
   const sheets = await authenticateGoogleSheets();
   const spreadsheetId = "1XtAWMXAeMUEo74ZtSclq1krERQPmyNztmHj3j9obsY4";
 
-  // Sort data by createdAt
-  reportData = reportData.sort(
-    (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
-  );
-
   const reportLength = reportData.length + 2; // Add 2 because of timestamp and header row
 
   // Format timestamp
@@ -362,7 +358,8 @@ export async function updateTransactionsReportSheet(reportData: any[]) {
       "Lockup Proposals",
       "Lockup Amount (NEAR)",
       "Lockup Value (USD)",
-    ], // Row 2: Column headers
+      "Total Transactions Value (USD)",
+    ],
     ...reportData.map((row) => [
       row.treasuryUrl,
       row.paymentProposals,
@@ -377,6 +374,11 @@ export async function updateTransactionsReportSheet(reportData: any[]) {
       row.lockupProposals,
       row.totalLockupNear,
       row.totalLockedValueUSD,
+      Big(row.totalPaymentValue || 0)
+        .plus(row.totalExchangeValue || 0)
+        .plus(row.totalStakedUSD || 0)
+        .plus(row.totalLockedValueUSD || 0)
+        .toFixed(),
     ]),
     [
       "TOTAL",
@@ -393,6 +395,7 @@ export async function updateTransactionsReportSheet(reportData: any[]) {
         "K",
         "L",
         "M",
+        "N",
       ]),
     ],
   ];
@@ -480,6 +483,7 @@ export async function updateTransactionsReportSheet(reportData: any[]) {
       { col: 7, type: "CURRENCY" },
       { col: 10, type: "CURRENCY" },
       { col: 13, type: "CURRENCY" },
+      { col: 14, type: "CURRENCY" },
     ].map(({ col, type }) =>
       formatColumnNumber(sheetId, 3, reportLength, col - 1, type)
     ),
@@ -491,7 +495,7 @@ export async function updateTransactionsReportSheet(reportData: any[]) {
           sheetId,
           dimension: "COLUMNS",
           startIndex: 0,
-          endIndex: 13,
+          endIndex: 14,
         },
       },
     },
