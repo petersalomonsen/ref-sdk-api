@@ -61,28 +61,6 @@ async function fetchFtMeta(contract_id: string): Promise<FtsToken | null> {
   }
 }
 
-async function updateFtsWithFastNear(
-  fastnearTokens: FastNearToken[],
-  existingFts: FtsToken[]
-): Promise<FtsToken[]> {
-  const map = new Map(existingFts.map((ft) => [ft.contract, ft]));
-
-  const missing = fastnearTokens.filter((t) => !map.has(t.contract_id));
-  const fetched = await Promise.all(
-    missing.map((t) => fetchFtMeta(t.contract_id))
-  );
-
-  for (let i = 0; i < fetched.length; i++) {
-    const ft = fetched[i];
-    if (ft) {
-      ft.amount = missing[i].balance;
-      map.set(ft.contract, ft);
-    }
-  }
-
-  return Array.from(map.values());
-}
-
 export async function getFTTokens(account_id: string, cache: FTCache) {
   if (!account_id) throw new Error("Account ID is required");
 
@@ -107,10 +85,31 @@ export async function getFTTokens(account_id: string, cache: FTCache) {
       axios.get(`https://api.fastnear.com/v1/account/${account_id}/full`),
     ]);
 
-    const existingFts = nearblocksRes?.data?.inventory?.fts || [];
+    const nearblocksFts = nearblocksRes?.data?.inventory?.fts || [];
     const fastnearFts = fastnearRes?.data?.tokens || [];
 
-    const updatedFts = await updateFtsWithFastNear(fastnearFts, existingFts);
+    const nearblocksMap = new Map((nearblocksFts as FtsToken[]).map((ft) => [ft.contract, ft]));
+
+    const mergedFts = await Promise.all(fastnearFts.map(async (ft: any) => {
+      const meta = nearblocksMap.get(ft.contract_id) as FtsToken | undefined;
+      if (meta && meta.ft_meta) {
+        return {
+          contract: ft.contract_id,
+          amount: ft.balance, // use FastNear balance
+          ft_meta: meta.ft_meta,
+        } as FtsToken;
+      } else {
+        // Fetch metadata if not found in Nearblocks
+        const fetched = await fetchFtMeta(ft.contract_id);
+        if (fetched) {
+          fetched.amount = ft.balance;
+          return fetched;
+        }
+        return null;
+      }
+    })) as FtsToken[];
+
+    const updatedFts = mergedFts.filter(Boolean) as FtsToken[];
 
     // Sort & calculate total
     const sorted = updatedFts.sort((a, b) => {
@@ -164,3 +163,4 @@ export async function getFTTokens(account_id: string, cache: FTCache) {
     throw new Error("Failed to fetch FT tokens");
   }
 }
+

@@ -82,5 +82,12 @@
     "createdBy": "manual",
     "instanceAccount": "treasury-meteor.near",
     "daoAccount": "meteor.sputnik-dao.near"
+  },
+  {
+    "name": "near-india",
+    "createdAt": "2025-06-23T12:00:00Z",
+    "createdBy": "manual",
+    "instanceAccount": "treasury-near-india.near",
+    "daoAccount": "near-india.sputnik-dao.near"
   }
 ]

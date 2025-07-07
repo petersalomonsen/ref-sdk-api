@@ -3,6 +3,7 @@ import cors from "cors";
 import * as dotenv from "dotenv";
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
+import Big from "big.js";
 import { getWhitelistTokens } from "./whitelist-tokens";
 import { getSwap, SwapParams } from "./swap";
 import { getNearPrice } from "./near-price";
@@ -351,10 +352,16 @@ app.get("/api/validators", async (req: Request, res: Response) => {
       }
     );
     const validators = data?.map((item: any) => {
+      const numerator = new Big(item.fees.numerator || 0);
+      const denominator = new Big(item.fees.denominator || 1);       
+      const feePercent = numerator.div(denominator).times(100);
+      const isWholeNumber = feePercent.mod(1).eq(0);
+      
       return {
         pool_id: item.account_id,
-        fee: item.fees.numerator,
+        fee: isWholeNumber ? feePercent.toFixed(0) : feePercent.toFixed(2),
       };
+      
     });
     cache.set(cacheKey, validators, 60 * 60 * 24); // 1 day
     return res.send(validators);
