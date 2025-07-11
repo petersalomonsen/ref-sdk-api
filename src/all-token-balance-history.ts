@@ -290,7 +290,7 @@ export async function getAllTokenBalanceHistory(
         );
 
         if (prev) {
-          await prisma.tokenBalanceHistory.update({
+          prisma.tokenBalanceHistory.update({
             where: {
               account_id_token_id_period: {
                 account_id,
@@ -302,9 +302,9 @@ export async function getAllTokenBalanceHistory(
               balance_history: finalHistory,
               toBlock: currentBlock,
             },
-          });
+          }).catch((e) => console.error("DB write failed:", e.message));
         } else {
-          await prisma.tokenBalanceHistory.create({
+          prisma.tokenBalanceHistory.create({
             data: {
               account_id,
               token_id,
@@ -313,7 +313,7 @@ export async function getAllTokenBalanceHistory(
               fromBlock: blockHeights[0],
               toBlock: currentBlock,
             },
-          });
+          }).catch((e) => console.error("DB write failed:", e.message));
         }
 
         return { period, data: finalHistory };
