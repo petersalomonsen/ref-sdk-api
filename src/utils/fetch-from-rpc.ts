@@ -134,14 +134,16 @@ export async function fetchFromRPC(
       }
 
       // Store successful response in cache
-      prisma.rpcRequest.create({
-        data: {
-          requestHash,
-          endpoint: endpoint,
-          requestBody: body,
-          responseBody: data,
-        },
-      }).catch((e) => console.error("DB write failed:", e.message));
+      prisma.rpcRequest
+        .create({
+          data: {
+            requestHash,
+            endpoint: endpoint,
+            requestBody: body,
+            responseBody: data,
+          },
+        })
+        .catch((e) => console.error("DB write failed:", e.message));
 
       return data;
     } catch (error: any) {

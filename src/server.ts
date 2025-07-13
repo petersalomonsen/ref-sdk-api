@@ -408,22 +408,31 @@ app.get("/headers", (req, res) => {
 });
 
 // Schedule a job to clear RpcRequest and AccountBlockExistence every day at 6:30 AM UTC
-cron.schedule("30 6 * * *", async () => {
-  try {
-    const deletedRpc = await prisma.rpcRequest.deleteMany();
-    const deletedAccountBlock = await prisma.accountBlockExistence.deleteMany();
-    console.log(
-      `[CRON] Cleared RpcRequest table: ${deletedRpc.count} rows deleted`
-    );
-    console.log(
-      `[CRON] Cleared AccountBlockExistence table: ${deletedAccountBlock.count} rows deleted`
-    );
-  } catch (error) {
-    console.error("[CRON] Error clearing tables:", error);
-  }
-}, {
-  timezone: "UTC"
-});
+let cleanupJob: any = null;
+
+if (process.env.NODE_ENV !== "test") {
+  cleanupJob = cron.schedule(
+    "30 6 * * *",
+    async () => {
+      try {
+        const deletedRpc = await prisma.rpcRequest.deleteMany();
+        const deletedAccountBlock =
+          await prisma.accountBlockExistence.deleteMany();
+        console.log(
+          `[CRON] Cleared RpcRequest table: ${deletedRpc.count} rows deleted`
+        );
+        console.log(
+          `[CRON] Cleared AccountBlockExistence table: ${deletedAccountBlock.count} rows deleted`
+        );
+      } catch (error) {
+        console.error("[CRON] Error clearing tables:", error);
+      }
+    },
+    {
+      timezone: "UTC",
+    }
+  );
+}
 
 // Start the server
 if (process.env.NODE_ENV !== "test") {
