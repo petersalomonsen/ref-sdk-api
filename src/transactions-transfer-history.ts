@@ -62,11 +62,13 @@ export async function getTransactionsTransferHistory(
 
       if (isUpdated) {
         cachedData = deduplicateByTimestamp([...allData, ...cachedData]);
-        await prisma.transferHistory.upsert({
-          where: { cacheKey },
-          update: { data: cachedData, timestamp: new Date() },
-          create: { cacheKey, data: cachedData },
-        });
+        prisma.transferHistory
+          .upsert({
+            where: { cacheKey },
+            update: { data: cachedData, timestamp: new Date() },
+            create: { cacheKey, data: cachedData },
+          })
+          .catch((e) => console.error("DB write failed:", e.message));
       }
     }
 
@@ -92,11 +94,13 @@ export async function getTransactionsTransferHistory(
 
         cachedData = deduplicateByTimestamp([...cachedData, ...moreData]);
 
-        await prisma.transferHistory.upsert({
-          where: { cacheKey },
-          update: { data: cachedData, timestamp: new Date() },
-          create: { cacheKey, data: cachedData },
-        });
+        prisma.transferHistory
+          .upsert({
+            where: { cacheKey },
+            update: { data: cachedData, timestamp: new Date() },
+            create: { cacheKey, data: cachedData },
+          })
+          .catch((e) => console.error("DB write failed:", e.message));
       }
     }
 

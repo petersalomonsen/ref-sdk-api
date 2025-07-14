@@ -88,26 +88,30 @@ export async function getFTTokens(account_id: string, cache: FTCache) {
     const nearblocksFts = nearblocksRes?.data?.inventory?.fts || [];
     const fastnearFts = fastnearRes?.data?.tokens || [];
 
-    const nearblocksMap = new Map((nearblocksFts as FtsToken[]).map((ft) => [ft.contract, ft]));
+    const nearblocksMap = new Map(
+      (nearblocksFts as FtsToken[]).map((ft) => [ft.contract, ft])
+    );
 
-    const mergedFts = await Promise.all(fastnearFts.map(async (ft: any) => {
-      const meta = nearblocksMap.get(ft.contract_id) as FtsToken | undefined;
-      if (meta && meta.ft_meta) {
-        return {
-          contract: ft.contract_id,
-          amount: ft.balance, // use FastNear balance
-          ft_meta: meta.ft_meta,
-        } as FtsToken;
-      } else {
-        // Fetch metadata if not found in Nearblocks
-        const fetched = await fetchFtMeta(ft.contract_id);
-        if (fetched) {
-          fetched.amount = ft.balance;
-          return fetched;
+    const mergedFts = (await Promise.all(
+      fastnearFts.map(async (ft: any) => {
+        const meta = nearblocksMap.get(ft.contract_id) as FtsToken | undefined;
+        if (meta && meta.ft_meta) {
+          return {
+            contract: ft.contract_id,
+            amount: ft.balance, // use FastNear balance
+            ft_meta: meta.ft_meta,
+          } as FtsToken;
+        } else {
+          // Fetch metadata if not found in Nearblocks
+          const fetched = await fetchFtMeta(ft.contract_id);
+          if (fetched) {
+            fetched.amount = ft.balance;
+            return fetched;
+          }
+          return null;
         }
-        return null;
-      }
-    })) as FtsToken[];
+      })
+    )) as FtsToken[];
 
     const updatedFts = mergedFts.filter(Boolean) as FtsToken[];
 
@@ -142,11 +146,18 @@ export async function getFTTokens(account_id: string, cache: FTCache) {
 
     // Save to DB
     prisma.fTToken
-      .create({
-        data: {
+      .upsert({
+        where: { account_id },
+        update: {
+          totalCumulativeAmt: parseFloat(total.toFixed(2)),
+          fts: finalFts as any,
+          timestamp: new Date(),
+        },
+        create: {
           account_id,
           totalCumulativeAmt: parseFloat(total.toFixed(2)),
           fts: finalFts as any,
+          timestamp: new Date(),
         },
       })
       .catch((e) => console.error("DB write failed:", e.message));
@@ -163,4 +174,3 @@ export async function getFTTokens(account_id: string, cache: FTCache) {
     throw new Error("Failed to fetch FT tokens");
   }
 }
-

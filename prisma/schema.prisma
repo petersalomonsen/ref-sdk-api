@@ -41,7 +41,7 @@ model RpcRequest {
 
 model FTToken {
   id                 String   @id @default(uuid())
-  account_id         String
+  account_id         String   @unique
   totalCumulativeAmt Float
   fts                Json
   timestamp          DateTime @default(now())

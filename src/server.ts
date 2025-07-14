@@ -17,6 +17,7 @@ import prisma from "./prisma";
 import { tokens } from "./constants/tokens";
 import axios from "axios";
 import treasuryRoutes from "./routes/metrics";
+import cron from "node-cron";
 
 dotenv.config();
 
@@ -353,39 +354,20 @@ app.get("/api/validators", async (req: Request, res: Response) => {
     );
     const validators = data?.map((item: any) => {
       const numerator = new Big(item.fees.numerator || 0);
-      const denominator = new Big(item.fees.denominator || 1);       
+      const denominator = new Big(item.fees.denominator || 1);
       const feePercent = numerator.div(denominator).times(100);
       const isWholeNumber = feePercent.mod(1).eq(0);
-      
+
       return {
         pool_id: item.account_id,
         fee: isWholeNumber ? feePercent.toFixed(0) : feePercent.toFixed(2),
       };
-      
     });
     cache.set(cacheKey, validators, 60 * 60 * 24); // 1 day
     return res.send(validators);
   } catch (error) {
     console.error("Error fetching validators:", error);
     return res.status(500).send({ error: "Failed to fetch validators" });
-  }
-});
-
-app.delete("/api/rpc-request-db", async (req: Request, res: Response) => {
-  try {
-    // Delete all rows from RpcRequest table
-    await prisma.rpcRequest.deleteMany();
-
-    // Delete all rows from AccountBlockExistence table
-    await prisma.accountBlockExistence.deleteMany();
-
-    res.status(200).send({
-      message:
-        "RpcRequest and AccountBlockExistence tables cleared successfully.",
-    });
-  } catch (error) {
-    console.error("Error clearing tables:", error);
-    res.status(500).send({ error: "Failed to clear tables" });
   }
 });
 
@@ -424,6 +406,33 @@ app.get("/api/search-ft", async (req: Request, res: Response) => {
 app.get("/headers", (req, res) => {
   res.json({ headers: req.headers });
 });
+
+// Schedule a job to clear RpcRequest and AccountBlockExistence every day at 6:30 AM UTC
+let cleanupJob: any = null;
+
+if (process.env.NODE_ENV !== "test") {
+  cleanupJob = cron.schedule(
+    "30 6 * * *",
+    async () => {
+      try {
+        const deletedRpc = await prisma.rpcRequest.deleteMany();
+        const deletedAccountBlock =
+          await prisma.accountBlockExistence.deleteMany();
+        console.log(
+          `[CRON] Cleared RpcRequest table: ${deletedRpc.count} rows deleted`
+        );
+        console.log(
+          `[CRON] Cleared AccountBlockExistence table: ${deletedAccountBlock.count} rows deleted`
+        );
+      } catch (error) {
+        console.error("[CRON] Error clearing tables:", error);
+      }
+    },
+    {
+      timezone: "UTC",
+    }
+  );
+}
 
 // Start the server
 if (process.env.NODE_ENV !== "test") {

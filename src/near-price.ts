@@ -38,12 +38,22 @@ export async function getNearPrice(
 
       if (price) {
         console.log(`Fetched price from ${endpoint}: $${price}`);
-        await prisma.nearPrice.create({
-          data: {
-            price,
-            source: endpoint,
-          },
-        });
+        prisma.nearPrice
+          .upsert({
+            where: { id: "latest" },
+            update: {
+              price,
+              source: endpoint,
+              timestamp: new Date(),
+            },
+            create: {
+              id: "latest",
+              price,
+              source: endpoint,
+              timestamp: new Date(),
+            },
+          })
+          .catch((e) => console.error("DB write failed:", e.message));
         cache.set(cacheKey, price, 50); // for 50 seconds
         return price;
       }
