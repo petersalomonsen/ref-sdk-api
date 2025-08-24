@@ -17,6 +17,7 @@
     }
   },
   "remoteEnv": {
-    "DATABASE_URL": "postgresql://postgres:postgres@localhost:5432/ref_sdk_db?schema=public"
+    "DATABASE_URL": "postgresql://postgres:postgres@localhost:5432/ref_sdk_db?schema=public",
+    "NODE_OPTIONS": "--max-old-space-size=4096"
   }
 }

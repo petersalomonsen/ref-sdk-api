@@ -37,7 +37,8 @@ describe("Treasury 1Click API", () => {
 
     it("should accept valid sputnik-dao addresses", async () => {
       const axios = require("axios");
-      axios.post = jest.fn().mockResolvedValue({
+      const mockPost = jest.fn() as jest.MockedFunction<any>;
+      mockPost.mockResolvedValue({
         data: {
           quote: {
             amountOut: "1000000",
@@ -49,6 +50,7 @@ describe("Treasury 1Click API", () => {
           signature: "mock-signature",
         },
       });
+      axios.post = mockPost;
 
       const response = await request(app)
         .post("/api/treasury/oneclick-quote")
@@ -100,15 +102,20 @@ describe("Treasury 1Click API", () => {
 
     it("should handle 1Click API errors gracefully", async () => {
       const axios = require("axios");
-      axios.post = jest.fn().mockRejectedValue({
+      const mockPost = jest.fn() as jest.MockedFunction<any>;
+      mockPost.mockRejectedValue({
         response: {
           status: 400,
+          statusText: "Bad Request",
           data: {
-            error: "Invalid token",
+            message: "tokenOut is not valid",
+            timestamp: new Date().toISOString(),
+            path: "/v0/quote",
           },
         },
         isAxiosError: true,
       });
+      axios.post = mockPost;
 
       const response = await request(app)
         .post("/api/treasury/oneclick-quote")
@@ -122,17 +129,27 @@ describe("Treasury 1Click API", () => {
         });
 
       expect(response.status).toBe(400);
-      expect(response.body.error).toBe("Invalid token");
+      expect(response.body.error).toBe("tokenOut is not valid");
     });
 
     it("should handle 1Click API authentication errors", async () => {
       const axios = require("axios");
-      axios.post = jest.fn().mockRejectedValue({
+      const mockPost = jest.fn() as jest.MockedFunction<any>;
+      mockPost.mockRejectedValue({
         response: {
           status: 401,
+          statusText: "Unauthorized",
+          data: {
+            message: "Invalid token",
+            error: "Unauthorized",
+            statusCode: 401,
+            timestamp: new Date().toISOString(),
+            path: "/v0/quote",
+          },
         },
         isAxiosError: true,
       });
+      axios.post = mockPost;
 
       const response = await request(app)
         .post("/api/treasury/oneclick-quote")
@@ -153,7 +170,8 @@ describe("Treasury 1Click API", () => {
       const axios = require("axios");
       let capturedRequest: any;
 
-      axios.post = jest.fn().mockImplementation((url, data) => {
+      const mockPost = jest.fn() as jest.MockedFunction<any>;
+      mockPost.mockImplementation((url: any, data: any) => {
         capturedRequest = data;
         return Promise.resolve({
           data: {
@@ -168,6 +186,7 @@ describe("Treasury 1Click API", () => {
           },
         });
       });
+      axios.post = mockPost;
 
       await request(app)
         .post("/api/treasury/oneclick-quote")

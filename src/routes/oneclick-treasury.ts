@@ -121,14 +121,14 @@ router.post(
 
       console.log("Fetching quote from 1Click API:", quoteRequest);
 
-      // Make request to 1Click API with API key
+      // Make request to 1Click API with Bearer JWT token
       const headers: any = {
         "content-type": "application/json",
       };
 
-      // Add API key if available
+      // Add Bearer JWT token if available
       if (ONECLICK_API_KEY) {
-        headers["x-api-key"] = ONECLICK_API_KEY;
+        headers["Authorization"] = `Bearer ${ONECLICK_API_KEY}`;
       }
 
       const response = await axios.post(
@@ -171,17 +171,23 @@ router.post(
     } catch (error) {
       console.error("Error in /api/treasury/oneclick-quote:", error);
 
-      if (axios.isAxiosError(error)) {
+      if (axios.isAxiosError(error) || (error as any).isAxiosError) {
         // Handle 1Click API errors
-        if (error.response?.status === 401) {
+        const axiosError = error as any;
+        if (axiosError.response?.status === 401) {
           return res.status(500).json({
             error:
               "1Click API authentication failed. Please check API key configuration.",
           });
         }
-        if (error.response?.data?.error) {
+        if (
+          axiosError.response?.data?.error ||
+          axiosError.response?.data?.message
+        ) {
           return res.status(400).json({
-            error: error.response.data.error,
+            error:
+              axiosError.response.data.error ||
+              axiosError.response.data.message,
           });
         }
       }
