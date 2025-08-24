@@ -6,8 +6,7 @@ dotenv.config();
 
 const router = Router();
 
-// Environment variable for 1Click API key
-const ONECLICK_API_KEY = process.env.ONECLICK_API_KEY;
+// Default 1Click API URL (can be overridden by env var)
 const ONECLICK_API_URL =
   process.env.ONECLICK_API_URL || "https://1click.chaindefuser.com/v0";
 
@@ -126,9 +125,10 @@ router.post(
         "content-type": "application/json",
       };
 
-      // Add Bearer JWT token if available
-      if (ONECLICK_API_KEY) {
-        headers["Authorization"] = `Bearer ${ONECLICK_API_KEY}`;
+      // Add Bearer JWT token if available (read dynamically from env)
+      const apiKey = process.env.ONECLICK_API_KEY;
+      if (apiKey) {
+        headers["Authorization"] = `Bearer ${apiKey}`;
       }
 
       const response = await axios.post(
@@ -137,9 +137,13 @@ router.post(
         { headers }
       );
 
-      if (!response.data || response.data.error) {
+      if (!response || !response.data) {
+        throw new Error("No response received from 1Click API");
+      }
+
+      if (response.data.error) {
         throw new Error(
-          response.data?.error || "Failed to fetch quote from 1Click API"
+          response.data.error || "Failed to fetch quote from 1Click API"
         );
       }
 
