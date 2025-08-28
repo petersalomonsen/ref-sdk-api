@@ -1,6 +1,7 @@
 import { describe, it, expect, jest, beforeEach } from "@jest/globals";
 import request from "supertest";
 import express from "express";
+import axios from "axios";
 import oneclickTreasuryRoutes from "../src/routes/oneclick-treasury";
 
 // Create a test app
@@ -36,7 +37,6 @@ describe("Treasury 1Click API", () => {
     });
 
     it("should accept valid sputnik-dao addresses", async () => {
-      const axios = require("axios");
       const mockPost = jest.fn() as jest.MockedFunction<any>;
       mockPost.mockResolvedValue({
         data: {
@@ -101,7 +101,6 @@ describe("Treasury 1Click API", () => {
     });
 
     it("should handle 1Click API errors gracefully", async () => {
-      const axios = require("axios");
       const mockPost = jest.fn() as jest.MockedFunction<any>;
       mockPost.mockRejectedValue({
         response: {
@@ -133,7 +132,6 @@ describe("Treasury 1Click API", () => {
     });
 
     it("should handle 1Click API authentication errors", async () => {
-      const axios = require("axios");
       const mockPost = jest.fn() as jest.MockedFunction<any>;
       mockPost.mockRejectedValue({
         response: {
@@ -167,11 +165,10 @@ describe("Treasury 1Click API", () => {
     });
 
     it("should set dry to false in requests to 1Click API", async () => {
-      const axios = require("axios");
       let capturedRequest: any;
 
       const mockPost = jest.fn() as jest.MockedFunction<any>;
-      mockPost.mockImplementation((url: any, data: any) => {
+      mockPost.mockImplementation((_url: any, data: any) => {
         capturedRequest = data;
         return Promise.resolve({
           data: {

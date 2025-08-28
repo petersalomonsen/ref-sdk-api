@@ -1,7 +1,12 @@
 import { describe, it, expect } from "@jest/globals";
 import request from "supertest";
 import express from "express";
+import https from "https";
+import axios from "axios";
 import oneclickTreasuryRoutes from "../src/routes/oneclick-treasury";
+
+// Prevent keep-alive connections that cause open handle warnings
+axios.defaults.httpsAgent = new https.Agent({ keepAlive: false });
 
 // Create a test app
 const app = express();

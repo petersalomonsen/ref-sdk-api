@@ -118,8 +118,6 @@ router.post(
         });
       }
 
-      console.log("Fetching quote from 1Click API:", quoteRequest);
-
       // Make request to 1Click API with Bearer JWT token
       const headers: any = {
         "content-type": "application/json",
@@ -173,8 +171,6 @@ router.post(
         quoteRequest, // Include for debugging/transparency
       });
     } catch (error) {
-      console.error("Error in /api/treasury/oneclick-quote:", error);
-
       if (axios.isAxiosError(error) || (error as any).isAxiosError) {
         // Handle 1Click API errors
         const axiosError = error as any;

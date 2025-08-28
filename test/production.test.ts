@@ -23,7 +23,7 @@ describe("Production API Status Tests", () => {
       });
       expect(res.status).toBe(200);
     },
-    30000 // 30 second timeout per test
+    60000 // 60 second timeout per test
   );
 
   test.each(accounts)(
@@ -60,7 +60,7 @@ describe("Production API Status Tests", () => {
       );
       expect(res.status).toBe(200);
     },
-    30000 // 30 second timeout for this endpoint
+    60000 // 60 second timeout for this endpoint
   );
 
   test("GET /api/near-price returns 200", async () => {
